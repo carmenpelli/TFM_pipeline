@@ -1,17 +1,18 @@
 ################################################################################
-##  INSPECCIÓN DE CLUSTERS DE CRMs — diagnóstico chaining vs. región densa
+##  crm_inspect.R — Inspección de clústeres de CRMs
 ##  --------------------------------------------------------------------------
-##  Dado un conjunto de CRMs (una región) y un umbral, construye los clusters
-##  (componentes conexas con el criterio compuesto) y examina los mayores para
-##  distinguir:
-##    - CHAINING: cadena transitiva sin núcleo común (has_common_core=FALSE
-##      o core_fraction<=0). Artefacto: A-B-C-...-Z fundidos sin región compartida.
-##    - REGIÓN DENSA REAL: muchos CRMs apilados sobre un núcleo común
-##      (has_common_core=TRUE, core_fraction>0). Posible "candidato estructural
-##      a super-enhancer" / región reguladora densa (terminología del TFM).
+##  Este script construye clústeres de CRMs mediante componentes conexas bajo
+##  un criterio de similitud y evalúa la cohesión de los clústeres de mayor
+##  tamaño.
 ##
-##  Reutiliza compute_crm_edges_chunked() de crm_explore.R (debe estar cargado).
-##  Dependencias: data.table, GenomicRanges, igraph
+##  El análisis permite distinguir clústeres con núcleo común, compatibles con
+##  redundancia estructural o acumulación local de CRMs, de clústeres generados
+##  por encadenamiento transitivo.
+##
+##  Reutiliza compute_crm_edges_chunked() de crm_explore.R.
+##
+##  Dependencias:
+##    data.table, GenomicRanges, igraph.
 ################################################################################
 
 suppressPackageStartupMessages({
@@ -25,23 +26,23 @@ if (!exists(".msg")) .msg <- function(...) {
 }
 
 ## ============================================================================
-## INSPECCIÓN DE CLUSTERS DE CRMs
+## Inspección de clústeres de CRMs
 ## ============================================================================
 
-#' Construye clusters de CRMs y diagnostica los mayores (chaining vs densidad).
+#' Construye clústeres de CRMs y evalúa la cohesión de los de mayor tamaño.
 #'
 #' @param dt          data.table de CRMs (región): chr,start,end,ID + metadatos.
 #' @param thr_recip   umbral recíproco (def. 0.50, criterio del documento).
 #' @param jaccard_thr,simpson_thr umbrales del criterio compuesto.
 #' @param criterion   "composite" (del documento) o "reciprocal_only".
-#' @param top_n       nº de clusters mayores a examinar en detalle.
+#' @param top_n       número de clústeres mayores a examinar en detalle.
 #' @param sample_rows nº de CRMs a mostrar del cluster más grande (muestra).
 #' @param meta_cols   columnas de metadatos a incluir en la muestra.
 #' @param chunk_size  tamaño de bloque para compute_crm_edges_chunked.
 #' @return lista:
-#'   sizes      : data.table(cluster_id, n) ordenada desc
-#'   cohesion   : diagnóstico por cluster de los top_n mayores
-#'   biggest    : muestra de CRMs del cluster más grande (coords + metadatos)
+#'   sizes      : data.table(cluster_id, n) ordenada de forma descendente.
+#'   cohesion   : diagnóstico por clúster de los top_n mayores.
+#'   biggest    : muestra de CRMs del clúster más grande.
 #'   membership : data.table(ID, cluster_id) completa
 inspect_crm_clusters <- function(dt,
                                  thr_recip    = 0.50,
@@ -59,7 +60,7 @@ inspect_crm_clusters <- function(dt,
   stopifnot(all(c("chr", "start", "end", "ID") %in% names(dt)))
   all_ids <- dt$ID
 
-  ## --- Aristas (reutiliza la función por bloques ya definida) ---------------
+  ## --- Cálculo de aristas mediante la función por bloques --------------------
   if (!exists("compute_crm_edges_chunked"))
     stop("Falta compute_crm_edges_chunked(). Carga primero crm_explore.R.")
 
@@ -69,7 +70,7 @@ inspect_crm_clusters <- function(dt,
     keep_metrics = FALSE, chunk_size = chunk_size
   )
 
-  ## --- Grafo + componentes conexas -----------------------------------------
+  ## --- Construcción del grafo y componentes conexas --------------------------
   edf <- if (nrow(edges) > 0L)
     as.data.frame(edges[, .(id_i, id_j)], stringsAsFactors = FALSE) else
     data.frame(id_i = character(), id_j = character(), stringsAsFactors = FALSE)
@@ -80,16 +81,16 @@ inspect_crm_clusters <- function(dt,
                            cluster_id = as.integer(comp$membership))
 
   sizes <- membership[, .(n = .N), by = cluster_id][order(-n)]
-  .msg("Clusters: ", nrow(sizes), " | cluster mayor: ", sizes$n[1L], " CRMs.")
+  .msg("Clústeres: ", nrow(sizes), " | clúster mayor: ", sizes$n[1L], " CRMs.")
 
-  ## --- Diagnóstico de cohesión de los top_n mayores ------------------------
+  ## --- Diagnóstico de cohesión de los clústeres de mayor tamaño --------------
   top_ids <- sizes[n > 1L][seq_len(min(top_n, .N))]$cluster_id
   d <- merge(dt, membership, by = "ID")
   d[, length := end - start + 1L]
 
   cohesion <- d[cluster_id %in% top_ids, {
-    sp   <- max(end) - min(start) + 1L         # extensión total (span)
-    core <- min(end) - max(start) + 1L         # núcleo común (<=0 => sin núcleo)
+    sp   <- max(end) - min(start) + 1L         # extensión total del clúster
+    core <- min(end) - max(start) + 1L         # núcleo común compartido por los miembros
     .(n               = .N,
       span            = sp,
       core_len        = core,
@@ -100,12 +101,12 @@ inspect_crm_clusters <- function(dt,
       len_ratio       = max(length) / min(length))
   }, by = cluster_id][order(-n)]
 
-  ## --- Muestra del cluster MÁS GRANDE (para inspección visual) -------------
+  ## --- Muestra del clúster de mayor tamaño ----------------------------------
   big_id <- sizes$cluster_id[1L]
   big <- d[cluster_id == big_id][order(start)]
   show_cols <- intersect(c("ID", "chr", "start", "end", "length",
                            meta_cols), names(big))
-  # Muestra: primeros, del medio y últimos por coordenada (para ver el rango)
+  # Muestreo distribuido a lo largo de las coordenadas del clúster.
   ns <- nrow(big)
   if (ns > sample_rows) {
     idx <- unique(round(seq(1, ns, length.out = sample_rows)))
@@ -114,7 +115,7 @@ inspect_crm_clusters <- function(dt,
     biggest <- big[, ..show_cols]
   }
 
-  ## --- Diagnóstico global de cohesión (todos los clusters multi-miembro) ---
+  ## --- Diagnóstico global de cohesión de clústeres multi-miembro -------------
   global_coh <- d[cluster_id %in% sizes[n > 1L]$cluster_id, {
     core <- min(end) - max(start) + 1L
     sp   <- max(end) - min(start) + 1L
@@ -128,7 +129,7 @@ inspect_crm_clusters <- function(dt,
     core_frac_mediana    = median(core_fraction),
     len_ratio_mediana    = median(len_ratio)
   )]
-  .msg("Clusters multi-miembro con núcleo común: ",
+  .msg("Clústeres multi-miembro con núcleo común: ",
        round(100 * global_summary$frac_con_nucleo, 1), "% | ",
        "core_fraction mediana: ", round(global_summary$core_frac_mediana, 3), ".")
 
@@ -144,7 +145,7 @@ inspect_crm_clusters <- function(dt,
 }
 
 ## ============================================================================
-## EJEMPLO DE USO
+## Ejemplo de uso
 ## ----------------------------------------------------------------------------
 ## source("crm_explore.R")        # define compute_crm_edges_chunked
 ## source("crm_inspect.R")        # este archivo
@@ -153,17 +154,17 @@ inspect_crm_clusters <- function(dt,
 ##
 ## insp <- inspect_crm_clusters(reg, thr_recip = 0.50, top_n = 10)
 ##
-## # Diagnóstico global: ¿los clusters tienen núcleo común o son cadenas?
+## # Diagnóstico global de existencia de núcleo común.
 ## print(insp$global_summary)
-## #   frac_con_nucleo ~1  + core_frac_mediana > 0  => regiones densas reales
-## #   frac_con_nucleo bajo / core_fraction <= 0     => CHAINING
+## #   frac_con_nucleo cercano a 1 y core_frac_mediana > 0 sugieren clústeres cohesionados.
+## #   valores bajos sugieren posible encadenamiento transitivo.
 ##
-## # Los 10 clusters mayores en detalle:
+## # Clústeres de mayor tamaño en detalle:
 ## print(insp$cohesion)
-## #   has_common_core=FALSE  o  core_fraction<=0  en el mayor => chaining
+## #   has_common_core = FALSE o core_fraction <= 0 sugieren ausencia de núcleo común.
 ##
-## # Muestra del cluster más grande (coordenadas + biosamples):
+## # Muestra del clúster más grande:
 ## print(insp$biggest)
-## #   Si todos los CRMs comparten una región estrecha => densidad real.
-## #   Si las coordenadas "se desplazan" a lo largo del span => cadena.
+## #   La concentración de coordenadas en una región estrecha sugiere cohesión.
+## #   La dispersión progresiva a lo largo del span sugiere encadenamiento.
 ## ============================================================================

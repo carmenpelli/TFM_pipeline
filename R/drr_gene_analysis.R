@@ -1,16 +1,16 @@
 ################################################################################
-##  ANÁLISIS GÉNICO Y NORMALIZACIÓN DE DRRs
+##  drr_gene_analysis.R — Análisis génico asociado a DRRs
 ##  --------------------------------------------------------------------------
-##  Usa human_genes.tsv (chr,start,end,symbol,score,strand) para:
-##    (1) Validación posicional: qué genes REALES caen en/cerca de cada DRR.
-##    (2) Marcado de promotores estilo ROSE (TSS ± tss_window, def. 2500 pb).
-##    (3) Anotación del gen más cercano (contexto).
-##  Y añade:
-##    (4) Normalización por tamaño de la validación SEdb (solapes SEdb / kb),
-##        para separar el efecto "densidad" del efecto "tamaño".
+##  Este script utiliza anotaciones génicas para contextualizar las regiones
+##  reguladoras densas (DRRs). Incluye funciones para identificar genes
+##  solapantes o próximos, marcar regiones promotoras alrededor del TSS,
+##  anotar el gen más cercano y normalizar solapamientos con SEdb por longitud.
 ##
-##  RECORDATORIO: candidatos estructurales, NO super-enhancers confirmados.
-##  Dependencias: data.table, GenomicRanges
+##  Las anotaciones génicas se utilizan como contexto adicional y no constituyen
+##  una validación funcional independiente de las DRRs.
+##
+##  Dependencias:
+##    data.table y GenomicRanges.
 ################################################################################
 
 suppressPackageStartupMessages({
@@ -38,7 +38,7 @@ load_human_genes <- function(path = "human_genes.tsv", chr = "chr8") {
   g[]
 }
 
-## Alias retrocompatible.
+## Alias de compatibilidad con versiones previas.
 load_human_genes_chr8 <- function(path = "human_genes.tsv", chr = "chr8") {
   load_human_genes(path = path, chr = chr)
 }
@@ -51,7 +51,7 @@ load_human_genes_chr8 <- function(path = "human_genes.tsv", chr = "chr8") {
 #' @param drr        tabla de DRRs (cmp$stacking), se excluye Extensive_overlap.
 #' @param genes      human_genes chr8 (de load_human_genes_chr8).
 #' @param flank      pb de margen alrededor de la DRR para considerar "cerca".
-#' @return data.table por DRR con genes solapantes y nº.
+#' @return data.table por DRR con genes solapantes y número.
 genes_in_drr <- function(drr, genes, flank = 0L) {
   cand <- drr[candidate_class != "Extensive_overlap"]
   drr_gr <- GRanges(cand$chr,
@@ -73,13 +73,13 @@ genes_in_drr <- function(drr, genes, flank = 0L) {
 }
 
 ## ============================================================================
-## (2) MARCADO DE PROMOTORES (estilo ROSE: TSS ± tss_window)
+## (2) MARCADo DE PROMOTORES (estilo ROSE: TSS ± tss_window)
 ## ============================================================================
 #' Marca DRRs que solapan una ventana de promotor alrededor de algún TSS.
 #'
 #' @param drr        tabla de DRRs.
 #' @param genes      human_genes con columna tss.
-#' @param tss_window pb a cada lado del TSS (def. 2500, como ROSE).
+#' @param tss_window pb a cada lado del TSS (por defecto 2500, como ROSE).
 #' @return data.table drr_id, overlaps_promoter (lógico), n_promoters.
 flag_promoter_drr <- function(drr, genes, tss_window = 2500L) {
   cand <- drr[candidate_class != "Extensive_overlap"]
@@ -97,7 +97,7 @@ flag_promoter_drr <- function(drr, genes, tss_window = 2500L) {
   per_drr <- prom[, .(n_promoters = uniqueN(symbol),
                       promoter_genes = paste(sort(unique(symbol)), collapse=";")),
                   by = drr_id]
-  # Todas las candidatas, con flag
+  # Tabla de candidatas con indicador correspondiente.
   out <- merge(data.table(drr_id = cand$drr_id), per_drr, by = "drr_id", all.x = TRUE)
   out[is.na(n_promoters), n_promoters := 0L]
   out[is.na(promoter_genes), promoter_genes := ""]
@@ -127,7 +127,7 @@ nearest_gene_drr <- function(drr, genes) {
 }
 
 ## ============================================================================
-## (4) NORMALIZACIÓN POR TAMAÑO DE LA VALIDACIÓN SEdb
+## (4) NORMALIZACIÓN POR TAMAÑo DE LA VALIDACIÓN SEdb
 ## ============================================================================
 #' Recalcula el solapamiento SEdb normalizado por longitud de DRR (solapes/kb).
 #'
@@ -137,7 +137,7 @@ nearest_gene_drr <- function(drr, genes) {
 sedb_overlap_normalized <- function(overlap, drr) {
   cand <- drr[candidate_class != "Extensive_overlap",
               .(drr_id, drr_length)]
-  # nº de SE distintos por DRR
+  # número de SE distintos por DRR
   per_drr <- overlap[, .(n_SE = uniqueN(se_id)), by = .(drr_id, candidate_class)]
   per_drr <- merge(per_drr, cand, by = "drr_id", all.x = TRUE)
   per_drr[, se_per_kb := n_SE / (drr_length / 1000)]
@@ -160,7 +160,7 @@ sedb_overlap_normalized <- function(overlap, drr) {
 }
 
 ## ============================================================================
-## EJEMPLO DE USO
+## Ejemplo de uso
 ## ----------------------------------------------------------------------------
 ## source("drr_gene_analysis.R")
 ## genes <- load_human_genes_chr8("human_genes.tsv")
@@ -179,7 +179,7 @@ sedb_overlap_normalized <- function(overlap, drr) {
 ## # (3) Gen más cercano:
 ## near   <- nearest_gene_drr(drr, genes)
 ##
-## # (4) Normalización por tamaño de la validación SEdb:
+## # (4) Normalización por tamaño de la comparación con SEdb:
 ## #     (usa el overlap de la validación previa: val$positional$overlap)
 ## norm   <- sedb_overlap_normalized(val$positional$overlap, drr)
 ## print(norm$summary)   # ¿Dense_complex sigue enriquecido tras normalizar por kb?

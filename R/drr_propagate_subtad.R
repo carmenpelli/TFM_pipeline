@@ -1,16 +1,12 @@
 ################################################################################
-##  PROPAGACIÓN DE LA ANOTACIÓN SUB-TAD A LAS DRRs
+##  drr_propagate_subtad.R — Propagación de anotación topológica a DRRs
 ##  --------------------------------------------------------------------------
-##  Cada DRR (bloque de apilamiento) está compuesta por varios CRMs reducidos.
-##  Cada CRM tiene asignado su sub-TAD más específico (a6$crm_tad). Aquí:
+##  Este script propaga la asignación de TAD reducido desde los CRMs consenso
+##  hacia las DRRs. Para cada DRR se identifica el conjunto de TADs reducidos
+##  representado por sus CRMs y se resume su coherencia topológica.
 ##
-##    (1) Se reconstruye la pertenencia CRM->DRR por solape posicional entre
-##        las coordenadas de la DRR y las de los CRMs (repr_*).
-##    (2) Se propaga: para cada DRR, el conjunto de sub-TADs de sus CRMs.
-##    (3) Se comprueba si la DRR está CONTENIDA EN UN ÚNICO SUB-TAD
-##        (predicción de la literatura: super-enhancers aislados en sub-dominios).
-##
-##  Dependencias: data.table, GenomicRanges
+##  Dependencias:
+##    data.table y GenomicRanges.
 ################################################################################
 
 suppressPackageStartupMessages({
@@ -29,14 +25,14 @@ if (!exists(".msg")) .msg <- function(...) {
 #' @param crm_reduced CRMs reducidos (cluster_id, chr, repr_start, repr_end).
 #' @param crm_tad     a6$crm_tad (crm_id, tad_id, tad_length, assignment_mode).
 #' @return lista:
-#'   drr_tad_long : una fila por (DRR, sub-TAD) con nº de CRMs que lo soportan.
-#'   drr_tad_sum  : una fila por DRR: nº de sub-TADs distintos, sub-TAD dominante,
+#'   drr_tad_long : una fila por (DRR, sub-TAD) con número de CRMs que lo soportan.
+#'   drr_tad_sum  : una fila por DRR: número de sub-TADs distintos, sub-TAD dominante,
 #'                  fracción de CRMs en el dominante, flag single_subtad.
 #'   by_class     : resumen por clase: % de DRRs en un único sub-TAD.
 propagate_subtad_to_drr <- function(drr, crm_reduced, crm_tad = NULL) {
   cand <- drr[candidate_class != "Extensive_overlap"]
 
-  # (1) Pertenencia CRM -> DRR por solape posicional
+  # (1) Pertenencia CRM → DRR por solape posicional
   drr_gr <- GRanges(cand$chr, IRanges(cand$drr_start, cand$drr_end),
                     drr_id = cand$drr_id, candidate_class = cand$candidate_class)
   # crm_reduced ya trae tad_id (la reducción intra-TAD lo añade): lo propagamos
@@ -69,7 +65,7 @@ propagate_subtad_to_drr <- function(drr, crm_reduced, crm_tad = NULL) {
     tad_length    = tad_length[1L]
   ), by = .(drr_id, candidate_class, tad_id)][order(drr_id, -n_crms_in_tad)]
 
-  # (3) Resumen por DRR: nº de sub-TADs, dominante, fracción en dominante
+  # (3) Resumen por DRR: número de sub-TADs, dominante, fracción en dominante
   drr_tad_sum <- drr_tad_long[, {
     tot <- sum(n_crms_in_tad)
     dom_n <- n_crms_in_tad[1L]            # ya ordenado desc
@@ -98,7 +94,7 @@ propagate_subtad_to_drr <- function(drr, crm_reduced, crm_tad = NULL) {
 }
 
 ## ============================================================================
-## EJEMPLO DE USO
+## Ejemplo de uso
 ## ----------------------------------------------------------------------------
 ## source("step6_assign_crm_subtad.R")   # a6 <- annotate_crm_subtad(...)
 ## source("drr_propagate_subtad.R")
@@ -113,7 +109,7 @@ propagate_subtad_to_drr <- function(drr, crm_reduced, crm_tad = NULL) {
 ## # Lectura: pct_single_subtad alto en Dense_complex apoyaría la predicción de
 ## # la literatura (super-enhancers aislados en un único sub-dominio).
 ##
-## head(prop$drr_tad_sum[order(-frac_in_dominant)])   # DRRs más "limpias"
+## head(prop$drr_tad_sum[order(-frac_in_dominant)])
 ## # DRRs multi-subTAD (posibles cruces de frontera):
 ## prop$drr_tad_sum[single_subtad == FALSE][order(-n_subtads)][1:20]
 ## ============================================================================

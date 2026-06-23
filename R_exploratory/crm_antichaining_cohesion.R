@@ -1,17 +1,24 @@
 ################################################################################
-##  INSPECCIÓN DE COHESIÓN DE LOS CLUSTERS ANTI-CHAINING (CRMs)
+##  crm_antichaining_cohesion.R — Evaluación de cohesión en clústeres de CRMs
 ##  --------------------------------------------------------------------------
-##  Verifica que los clusters producidos por el anti-chaining son SANOS
-##  (núcleo común = redundancia real) y no chaining residual.
+##  Este script inspecciona la cohesión interna de los clústeres generados por
+##  el procedimiento anti-chaining aplicado a CRMs.
 ##
-##  Mismo diagnóstico que usamos en TADs:
-##    has_common_core : ¿existe una región cubierta por TODOS los CRM del cluster?
-##    core_fraction   : fracción del span cubierta por ese núcleo (~1 = idénticos,
-##                      <=0 = sin núcleo => sospecha de chaining residual)
-##    len_ratio       : dispersión de tamaños dentro del cluster
+##  El objetivo es comprobar si los clústeres presentan una región común de
+##  intersección entre sus miembros, compatible con redundancia estructural, o
+##  si persisten patrones de encadenamiento transitivo.
+##
+##  Métricas principales:
+##    - has_common_core: existencia de una región común compartida por todos
+##      los CRMs del clúster.
+##    - core_fraction: fracción del intervalo total cubierta por dicho núcleo.
+##    - len_ratio: relación entre las longitudes máxima y mínima dentro del
+##      clúster.
 ##
 ##  Reutiliza anti_chaining_from_edges() y compute_crm_edges_chunked().
-##  Dependencias: data.table, GenomicRanges, igraph
+##
+##  Dependencias:
+##    data.table, GenomicRanges, igraph.
 ################################################################################
 
 suppressPackageStartupMessages({
@@ -24,17 +31,16 @@ if (!exists(".msg")) .msg <- function(...) {
   cat(sprintf("[%s] %s\n", format(Sys.time(), "%H:%M:%S"), paste0(...)))
 }
 
-#' Inspecciona la cohesión de los clusters del anti-chaining sobre una región.
+#' Inspecciona la cohesión de los clústeres del anti-chaining sobre una región.
 #'
 #' @param dt          data.table de CRMs (región): chr,start,end,ID + metadatos.
 #' @param thr_recip   umbral recíproco (def. 0.50).
 #' @param jaccard_thr,simpson_thr umbrales del criterio compuesto.
-#' @param top_n       nº de clusters mayores a examinar en detalle.
-#' @param sample_rows nº de CRM a mostrar del cluster mayor.
+#' @param top_n       número de clústeres mayores a examinar en detalle.
+#' @param sample_rows número de CRMs a mostrar del clúster mayor.
 #' @param meta_cols   metadatos a incluir en la muestra.
 #' @param chunk_size  tamaño de bloque.
-#' @return lista: sizes, cohesion (top_n), biggest (muestra), global_summary,
-#'         membership.
+#' @return lista con sizes, cohesion, biggest, global_summary y membership.
 inspect_antichaining_cohesion <- function(dt,
                                           thr_recip   = 0.50,
                                           jaccard_thr = 0.70,
@@ -55,7 +61,7 @@ inspect_antichaining_cohesion <- function(dt,
   dt[, length := end - start + 1L]
   n_input <- nrow(dt)
 
-  ## Aristas (criterio compuesto) + anti-chaining
+  ## Cálculo de aristas mediante el criterio compuesto y aplicación de anti-chaining.
   edges <- compute_crm_edges_chunked(
     dt, thr_recip = thr_recip, jaccard_thr = jaccard_thr,
     simpson_thr = simpson_thr, criterion = "composite",
@@ -65,9 +71,9 @@ inspect_antichaining_cohesion <- function(dt,
 
   d <- merge(dt, membership, by = "ID")
   sizes <- membership[, .(n = .N), by = cluster_id][order(-n)]
-  .msg("Anti-chaining: ", nrow(sizes), " clusters | mayor: ", sizes$n[1L], ".")
+  .msg("Anti-chaining: ", nrow(sizes), " clústeres | mayor: ", sizes$n[1L], ".")
 
-  ## Cohesión de los top_n mayores
+  ## Cohesión de los clústeres de mayor tamaño.
   top_ids <- sizes[n > 1L][seq_len(min(top_n, .N))]$cluster_id
   cohesion <- d[cluster_id %in% top_ids, {
     sp   <- max(end) - min(start) + 1L
@@ -82,7 +88,7 @@ inspect_antichaining_cohesion <- function(dt,
       len_ratio       = max(length) / min(length))
   }, by = cluster_id][order(-n)]
 
-  ## Muestra del cluster mayor
+  ## Muestra del clúster de mayor tamaño.
   big_id <- sizes$cluster_id[1L]
   big <- d[cluster_id == big_id][order(start)]
   show_cols <- intersect(c("ID","chr","start","end","length", meta_cols),
@@ -92,7 +98,7 @@ inspect_antichaining_cohesion <- function(dt,
     big[unique(round(seq(1, ns, length.out = sample_rows))), ..show_cols] else
     big[, ..show_cols]
 
-  ## Diagnóstico global sobre TODOS los clusters multi-miembro
+  ## Diagnóstico global sobre los clústeres con más de un miembro.
   multi_ids <- sizes[n > 1L]$cluster_id
   gc <- d[cluster_id %in% multi_ids, {
     core <- min(end) - max(start) + 1L
@@ -107,7 +113,7 @@ inspect_antichaining_cohesion <- function(dt,
     core_frac_mediana = median(core_fraction),
     len_ratio_mediana = median(len_ratio)
   )]
-  .msg("Multi-miembro con núcleo común: ",
+  .msg("Clústeres multi-miembro con núcleo común: ",
        round(100 * global_summary$frac_con_nucleo, 1), "% | ",
        "core_fraction mediana: ", round(global_summary$core_frac_mediana, 3), ".")
 
@@ -122,7 +128,7 @@ inspect_antichaining_cohesion <- function(dt,
 }
 
 ## ============================================================================
-## EJEMPLO DE USO
+## Ejemplo de uso
 ## ----------------------------------------------------------------------------
 ## source("crm_explore.R")
 ## source("crm_compare_strategies.R")
@@ -133,10 +139,10 @@ inspect_antichaining_cohesion <- function(dt,
 ##
 ## print(ac$global_summary)   # ¿los clusters tienen núcleo común?
 ## print(ac$cohesion)         # los 10 mayores en detalle
-## print(ac$biggest)          # muestra del cluster mayor (¿apilado o cadena?)
+## print(ac$biggest)          # muestra del clúster de mayor tamaño
 ##
-## # Lectura:
-## #   frac_con_nucleo alto + core_fraction>0 en los mayores => anti-chaining SANO
-## #   has_common_core=FALSE en el cluster de ~367 => aún hay chaining residual,
-## #     habría que subir thr_recip y reinspeccionar.
+## # Interpretación:
+## #   valores altos de frac_con_nucleo y core_fraction > 0 sugieren clústeres cohesionados.
+## #   has_common_core = FALSE en clústeres grandes sugiere encadenamiento residual,
+## #   que puede evaluarse aumentando thr_recip y repitiendo la inspección.
 ## ============================================================================

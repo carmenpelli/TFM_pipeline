@@ -1,20 +1,17 @@
 ################################################################################
-##  ANTI-CHAINING OPTIMIZADO (R PURO) — escalable a ~1.3M CRMs
+##  crm_antichaining_fast.R — Implementación optimizada de anti-chaining
 ##  --------------------------------------------------------------------------
-##  Misma lógica greedy por representante que anti_chaining_from_edges(), pero
-##  reescrita para eliminar los cuellos de botella que la hacían lenta:
+##  Este script implementa un algoritmo greedy de anti-chaining a partir de
+##  aristas de redundancia previamente filtradas. La implementación utiliza
+##  índices enteros, listas de adyacencia y vectores planos para reducir el
+##  coste computacional en conjuntos grandes de CRMs.
 ##
-##    1. IDs -> índices ENTEROS (match una sola vez). Búsquedas O(1) por
-##       posición en lugar de por nombre de carácter.
-##    2. Adyacencia como LISTA indexada por entero (split una sola vez), en
-##       lugar de consultar un data.table con clave dentro del bucle.
-##    3. Estado en vectores lógicos/enteros planos; sin nombres.
-##    4. Semillas en orden de mayor a menor tamaño (idéntico al original).
+##  La lógica de agrupamiento se mantiene equivalente a la versión basada en
+##  representantes; la diferencia principal está en la eficiencia de la
+##  implementación.
 ##
-##  El resultado (asignación a clusters) es EQUIVALENTE al anti-chaining previo;
-##  sólo cambia la implementación, no el método.
-##
-##  Dependencias: data.table  (igraph/GenomicRanges no se usan aquí)
+##  Dependencias:
+##    data.table.
 ################################################################################
 
 suppressPackageStartupMessages({
@@ -31,8 +28,8 @@ if (!exists(".msg")) .msg <- function(...) {
 #' @param edges data.table de aristas (id_i,id_j) que pasan el criterio.
 #' @param seed_metric vector OPCIONAL de prioridad de semilla por fila de dt
 #'        (mayor = antes). Por defecto la longitud (end-start+1): el elemento
-#'        más grande siembra el cluster. Debe tener length == nrow(dt).
-#' @param verbose si TRUE, informa progreso cada cierto nº de semillas.
+#'        elemento de mayor longitud se utiliza como semilla. Debe tener length == nrow(dt).
+#' @param verbose si TRUE, informa progreso cada cierto número de semillas.
 #' @return data.table membership (ID, cluster_id, representative_id).
 anti_chaining_fast <- function(dt, edges, seed_metric = NULL, verbose = TRUE) {
 
@@ -45,7 +42,7 @@ anti_chaining_fast <- function(dt, edges, seed_metric = NULL, verbose = TRUE) {
   if (nrow(edges) > 0L) {
     ei <- match(edges$id_i, ids)
     ej <- match(edges$id_j, ids)
-    # Por seguridad, descartar aristas con IDs no presentes (no debería ocurrir)
+    # Descartar aristas con IDs no presentes, si existieran.
     ok <- !is.na(ei) & !is.na(ej)
     ei <- ei[ok]; ej <- ej[ok]
   } else {
@@ -91,7 +88,7 @@ anti_chaining_fast <- function(dt, edges, seed_metric = NULL, verbose = TRUE) {
 
     nb <- adj[[seed]]
     if (length(nb)) {
-      # vecinos aún no asignados (indexación lógica por posición: rápida)
+      # Vecinos aún no asignados mediante indexación lógica por posición.
       nb <- nb[!assigned[nb]]
       if (length(nb)) {
         assigned[nb]   <- TRUE
@@ -113,39 +110,39 @@ anti_chaining_fast <- function(dt, edges, seed_metric = NULL, verbose = TRUE) {
 }
 
 ## ============================================================================
-## VERIFICACIÓN DE EQUIVALENCIA (opcional, para validar contra la versión lenta)
+## VERIFICACIÓN DE EQUIVALENCIA (opcional, para validar contra la versión de referencia)
 ## ----------------------------------------------------------------------------
-## Comprueba que la versión rápida produce la MISMA partición que la original.
-## La comparación es por PARTICIÓN (qué elementos caen juntos), no por los
+## Comprueba que la versión optimizada produce la misma partición que la original.
+## La comparación se basa en la partición obtenida, no en los
 ## cluster_id concretos (que pueden numerarse distinto si hay empates de orden).
 ## ============================================================================
 
-#' ¿Dos memberships representan la misma partición?
+#' Comprueba si dos tablas de pertenencia representan la misma partición.
 #' @return TRUE si agrupan idénticamente los IDs.
 same_partition <- function(m1, m2) {
   setkey(m1, ID); setkey(m2, ID)
   m <- merge(m1[, .(ID, c1 = cluster_id)],
              m2[, .(ID, c2 = cluster_id)], by = "ID")
-  # Dos particiones son iguales si el mapeo c1<->c2 es biyectivo y consistente.
+  # Dos particiones son iguales si el mapeo c1<→c2 es biyectivo y consistente.
   ok1 <- m[, uniqueN(c2) == 1L, by = c1][, all(V1)]
   ok2 <- m[, uniqueN(c1) == 1L, by = c2][, all(V1)]
   ok1 && ok2
 }
 
 ## ============================================================================
-## EJEMPLO DE USO
+## Ejemplo de uso
 ## ----------------------------------------------------------------------------
 ## source("crm_explore.R")
-## source("crm_compare_strategies.R")     # versión lenta (para validar)
+## source("crm_compare_strategies.R")     # versión de referencia (para validar)
 ## source("crm_antichaining_fast.R")      # este archivo
 ##
 ## reg <- subset_region(enh_unique, "chr8", 125e6, 130e6)
 ## edges <- compute_crm_edges_chunked(reg, thr_recip = 0.50, criterion="composite")
 ##
-## # Versión rápida:
+## # Versión optimizada:
 ## system.time(m_fast <- anti_chaining_fast(reg, edges))
 ##
-## # (Opcional) validar equivalencia contra la versión lenta:
+## # (Opcional) validar equivalencia contra la versión de referencia:
 ## # m_slow <- anti_chaining_from_edges(reg, edges)
 ## # same_partition(m_fast, m_slow)   # debe ser TRUE
 ##

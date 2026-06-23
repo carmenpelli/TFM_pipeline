@@ -1,24 +1,24 @@
 ################################################################################
-##  INSPECCIÓN DE CLUSTERS Y CLUSTERING ANTI-CHAINING PARA TADs
+##  tad_cluster_tools.R — Inspección exploratoria de clústeres de TADs
 ##  --------------------------------------------------------------------------
-##  Dos utilidades para la fase exploratoria de reducción de redundancia de TADs:
+##  Este script reúne utilidades para la fase exploratoria de reducción de
+##  redundancia de TADs.
 ##
-##    (1) inspect_tad_clusters()  -> DIAGNÓSTICO (no cambia metodología).
-##        Construye los clusters a un umbral dado (componentes conexas, igual
-##        que tu pipeline) y te deja examinar los más grandes: qué TADs los
-##        forman, sus coordenadas, longitudes y dispersión. Sirve para ver si
-##        un cluster grande son anotaciones equivalentes o una CADENA espuria.
+##  Funciones principales:
+##    (1) inspect_tad_clusters()
+##        Construye clústeres a partir de un umbral de solapamiento recíproco y
+##        permite examinar los clústeres de mayor tamaño, sus coordenadas,
+##        longitudes y métricas de cohesión.
 ##
-##    (2) cluster_tads_anti_chaining() -> VARIANTE METODOLÓGICA ALTERNATIVA.
-##        Rompe el encadenamiento transitivo exigiendo que cada miembro supere
-##        el umbral recíproco CONTRA EL REPRESENTANTE del cluster, no sólo
-##        contra algún vecino. Es DISTINTA del clustering por componentes
-##        conexas de tu pipeline de CRMs: úsala sólo como opción consciente.
+##    (2) cluster_tads_anti_chaining()
+##        Implementa una variante alternativa de agrupamiento greedy basada en
+##        similitud respecto al representante del clúster.
 ##
-##  Depende de compute_overlap_pairs_metrics() definida en tad_threshold_sweep.R
-##  (o equivalente). Aquí se incluye una copia mínima por si se usa suelto.
+##  El script incluye una versión autocontenida de compute_overlap_pairs_metrics()
+##  para poder ejecutarse de forma independiente.
 ##
-##  Dependencias: data.table, GenomicRanges, igraph
+##  Dependencias:
+##    data.table, GenomicRanges, igraph.
 ################################################################################
 
 suppressPackageStartupMessages({
@@ -28,9 +28,9 @@ suppressPackageStartupMessages({
 })
 
 ## ----------------------------------------------------------------------------
-## (copia mínima por si este archivo se usa de forma independiente)
-## Si ya cargaste tad_threshold_sweep.R, esta definición simplemente la
-## sobrescribe con una idéntica.
+## Versión mínima para uso independiente.
+## Si tad_threshold_sweep.R ya está cargado, esta definición mantiene la misma
+## interfaz y cálculo.
 ## ----------------------------------------------------------------------------
 compute_overlap_pairs_metrics <- function(dt) {
   dt <- as.data.table(dt)
@@ -76,17 +76,16 @@ compute_overlap_pairs_metrics <- function(dt) {
 }
 
 ## ============================================================================
-## (1) INSPECCIÓN DE CLUSTERS (DIAGNÓSTICO, mismo método que el pipeline)
+## (1) Inspección de clústeres mediante componentes conexas
 ## ============================================================================
 
-#' Construye clusters por componentes conexas a un umbral recíproco dado
-#' y permite inspeccionar los más grandes en detalle.
+#' Construye clústeres por componentes conexas e inspecciona los de mayor tamaño.
 #'
 #' @param tad_unique data.table TADs (chr,start,end,ID).
 #' @param thr_recip  umbral de reciprocal_overlap para crear arista.
 #' @param use_similarity si TRUE, replica el criterio estilo CRM:
 #'        arista si recíproco>=thr_recip Y (jaccard>=jaccard_thr O simpson>=simpson_thr).
-#'        Si FALSE (por defecto), arista por recíproco puro (recomendado en TADs).
+#'        Si FALSE, se utiliza únicamente el solapamiento recíproco.
 #' @param jaccard_thr,simpson_thr umbrales para use_similarity=TRUE.
 #' @param top_n      nº de clusters más grandes a devolver en detalle.
 #' @return lista con:
@@ -94,7 +93,7 @@ compute_overlap_pairs_metrics <- function(dt) {
 #'   sizes      : data.table(cluster_id, n) ordenada desc
 #'   top        : data.table con los TADs de los top_n clusters más grandes,
 #'                con coordenadas, longitud y métricas de cohesión por cluster
-#'   cohesion   : data.table por cluster con diagnóstico de chaining
+#'   cohesion   : data.table por clúster con métricas de cohesión.
 inspect_tad_clusters <- function(tad_unique,
                                  thr_recip      = 0.80,
                                  use_similarity = FALSE,
@@ -117,7 +116,7 @@ inspect_tad_clusters <- function(tad_unique,
     edges <- pairs[reciprocal_overlap >= thr_recip]
   }
 
-  # Grafo + componentes conexas (idéntico al pipeline)
+  # Grafo y componentes conexas.
   edf <- if (nrow(edges) > 0L)
     as.data.frame(edges[, .(id_i, id_j)], stringsAsFactors = FALSE) else
     data.frame(id_i = character(), id_j = character(), stringsAsFactors = FALSE)
@@ -135,26 +134,25 @@ inspect_tad_clusters <- function(tad_unique,
 
   sizes <- membership[, .(n = .N), by = cluster_id][order(-n)]
 
-  # IDs de los top_n clusters más grandes
+  # Identificadores de los clústeres de mayor tamaño.
   top_ids <- sizes[n > 1L][seq_len(min(top_n, .N))]$cluster_id
 
-  # Detalle de los TADs en esos clusters (coordenadas + longitud)
+  # Detalle de los TADs incluidos en esos clústeres.
   d_annot <- merge(dt, membership, by = "ID")
   d_annot[, length := end - start + 1L]
 
   top <- d_annot[cluster_id %in% top_ids][order(cluster_id, start)]
 
-  ## --- Cohesión / diagnóstico de chaining por cluster ----------------------
-  ## Para cada cluster medimos:
-  ##   n              : nº de TADs
-  ##   span           : extensión total (max(end)-min(start)) del cluster
-  ##   core_len       : "núcleo" común (min(end)-max(start)); <=0 => SIN núcleo
-  ##   len_min/len_max: longitudes extremas de los TADs del cluster
-  ##   len_ratio      : len_max/len_min (escalas mezcladas => jerarquía)
-  ##   has_common_core: TRUE si todos los TADs comparten una base común
-  ## Un cluster "sano" (anotaciones equivalentes) tiene core_len>0 y len_ratio
-  ## moderado. Un cluster por CHAINING suele tener core_len<=0 (sin base común)
-  ## y/o len_ratio grande (mezcla de escalas).
+  ## --- Métricas de cohesión por clúster -------------------------------------
+  ## Para cada clúster se calcula:
+  ##   n              : número de TADs.
+  ##   span           : extensión total del clúster.
+  ##   core_len       : longitud del núcleo común.
+  ##   len_min/len_max: longitudes extremas de los TADs del clúster.
+  ##   len_ratio      : relación entre la longitud máxima y mínima.
+  ##   has_common_core: TRUE si todos los TADs comparten una región común.
+  ## Estas métricas permiten detectar clústeres con núcleo común y clústeres
+  ## potencialmente afectados por encadenamiento transitivo.
   cohesion <- d_annot[, {
     sp   <- max(end) - min(start) + 1L
     core <- min(end) - max(start) + 1L
@@ -166,7 +164,7 @@ inspect_tad_clusters <- function(tad_unique,
       len_min         = lmin,
       len_max         = lmax,
       len_ratio       = lmax / lmin,
-      # fracción del span cubierta por el núcleo común (1=idénticos, <=0=chaining)
+      # fracción del span cubierta por el núcleo común
       core_fraction   = ifelse(sp > 0, core / sp, NA_real_))
   }, by = cluster_id][order(-n)]
 
@@ -189,35 +187,32 @@ show_cluster <- function(inspection, cluster) {
   top  <- inspection$top
   out  <- top[cluster_id == cluster]
   if (nrow(out) == 0L) {
-    message("El cluster ", cluster, " no está entre los top mostrados; ",
-            "contiene ", length(ids), " TADs. Aumenta top_n para verlo.")
+    message("El clúster ", cluster, " no está entre los clústeres mostrados; ",
+            "contiene ", length(ids), " TADs. Aumente top_n para visualizarlo.")
   }
   out[]
 }
 
 ## ============================================================================
-## (2) CLUSTERING ANTI-CHAINING (VARIANTE METODOLÓGICA ALTERNATIVA)
+## (2) Agrupamiento anti-chaining como variante metodológica alternativa
 ## ----------------------------------------------------------------------------
-## ¡ATENCIÓN! Esto NO es el clustering por componentes conexas de tu pipeline.
-## Es una alternativa que ROMPE el encadenamiento transitivo. Úsala de forma
-## consciente y decláralo en la memoria si la adoptas.
+## Esta función implementa una alternativa al agrupamiento por componentes
+## conexas. Su uso debe documentarse explícitamente si se adopta en el análisis
+## principal.
 ##
 ## Estrategia (greedy por representante):
 ##   1. Se calculan los pares que superan el umbral recíproco (aristas válidas).
 ##   2. Se ordenan los TADs por longitud (de mayor a menor) como semillas.
-##   3. Se recorre la lista: cada TAD aún no asignado abre un cluster nuevo y
-##      se convierte en REPRESENTANTE.
-##   4. Se asignan a ese cluster todos los TADs no asignados que superen el
-##      umbral recíproco CONTRA EL REPRESENTANTE (no contra cualquier vecino).
+##   3. Cada TAD no asignado inicia un nuevo clúster y se define como representante.
+##   4. Se incorporan al clúster los TADs no asignados que superan el umbral
+##      de solapamiento recíproco respecto al representante.
 ##   5. Se repite hasta asignar todos.
 ##
-## Diferencia clave vs. componentes conexas:
-##   - Componentes conexas: A-B-C-D se funden aunque A y D no se parezcan.
-##   - Anti-chaining: D sólo entra si se parece al REPRESENTANTE del cluster,
-##     evitando cadenas de TADs de escalas distintas.
+## La diferencia principal respecto a componentes conexas es que la asignación
+## exige similitud directa con el representante del clúster.
 ## ============================================================================
 
-#' Clustering greedy anti-chaining basado en similitud al representante.
+#' Agrupamiento greedy anti-chaining basado en similitud al representante.
 #'
 #' @param tad_unique data.table TADs (chr,start,end,ID).
 #' @param thr_recip  umbral de reciprocal_overlap contra el representante.
@@ -272,17 +267,16 @@ cluster_tads_anti_chaining <- function(tad_unique,
     if (assigned[[seed]]) next   # ya asignado a un cluster previo
     cid <- cid + 1L
 
-    # El seed es el representante del nuevo cluster
+    # La semilla actúa como representante del nuevo clúster.
     assigned[[seed]]   <- TRUE
     cluster_of[[seed]] <- cid
     rep_of[[seed]]     <- seed
 
     # Candidatos: vecinos del representante que superan el umbral recíproco.
-    # (adj ya sólo contiene pares >= thr_recip, así que todos sus vecinos valen.)
     nb <- adj[.(seed), to, nomatch = 0L]
     if (length(nb)) {
       nb <- unique(nb)
-      nb <- nb[!assigned[nb]]    # sólo los aún no asignados
+      nb <- nb[!assigned[nb]]    # únicamente los elementos aún no asignados
       if (length(nb)) {
         assigned[nb]   <- TRUE
         cluster_of[nb] <- cid
@@ -298,7 +292,7 @@ cluster_tads_anti_chaining <- function(tad_unique,
   )
   membership[, is_representative := (ID == representative_id)]
 
-  # Estadísticas por cluster
+  # Estadísticas por clúster.
   d <- merge(dt, membership, by = "ID")
   clusters <- d[, .(
     representative_id = representative_id[1L],
@@ -337,7 +331,7 @@ cluster_tads_anti_chaining <- function(tad_unique,
 #' @param thr_recip  umbral recíproco común.
 #' @return data.table con métricas lado a lado de ambos métodos.
 compare_clustering_methods <- function(tad_unique, thr_recip = 0.80) {
-  # Componentes conexas (vía inspect, reutilizando su lógica)
+  # Componentes conexas reutilizando la lógica de inspección.
   cc <- inspect_tad_clusters(tad_unique, thr_recip = thr_recip,
                              use_similarity = FALSE, top_n = 0)
   cc_sizes <- cc$sizes
@@ -349,7 +343,7 @@ compare_clustering_methods <- function(tad_unique, thr_recip = 0.80) {
     reduction_ratio  = 1 - nrow(cc_sizes) / nrow(as.data.table(tad_unique))
   )
 
-  # Anti-chaining
+  # Agrupamiento anti-chaining.
   ac <- cluster_tads_anti_chaining(tad_unique, thr_recip = thr_recip,
                                    seed_by = "length")
   ac_row <- data.table(
@@ -364,7 +358,7 @@ compare_clustering_methods <- function(tad_unique, thr_recip = 0.80) {
 }
 
 ## ============================================================================
-## EJEMPLO DE USO
+## Ejemplo de uso
 ## ----------------------------------------------------------------------------
 ## source("tad_threshold_sweep.R")          # opcional (métricas)
 ## source("tad_cluster_tools.R")            # este archivo
@@ -373,13 +367,13 @@ compare_clustering_methods <- function(tad_unique, thr_recip = 0.80) {
 ## insp <- inspect_tad_clusters(tad_unique, thr_recip = 0.80, top_n = 5)
 ## print(insp$sizes[1:10])      # tamaños de los 10 clusters mayores
 ## print(insp$cohesion[1:10])   # diagnóstico de chaining por cluster
-## # Mirar el cluster más grande en detalle:
+## # Inspección del clúster de mayor tamaño:
 ## big_id <- insp$sizes$cluster_id[1]
 ## print(show_cluster(insp, big_id))
-## # En 'cohesion': has_common_core=FALSE o core_fraction<=0 o len_ratio grande
-## # => el cluster es probablemente una CADENA, no anotaciones equivalentes.
+## # En 'cohesion', valores bajos de core_fraction o len_ratio elevado sugieren
+## # posible encadenamiento transitivo.
 ##
-## ## (2) ANTI-CHAINING a umbral 0.80
+## ## (2) Agrupamiento anti-chaining a umbral 0.80
 ## ac <- cluster_tads_anti_chaining(tad_unique, thr_recip = 0.80)
 ## print(ac$summary)
 ##

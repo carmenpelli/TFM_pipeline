@@ -1,15 +1,21 @@
 ################################################################################
-##  EXPLORACIÓN DE UMBRALES DE REDUNDANCIA PARA TADs
+##  tad_threshold_sweep.R — Exploración de umbrales de redundancia para TADs
 ##  --------------------------------------------------------------------------
-##  Uso exploratorio: NO reduce nada de forma definitiva.
-##  Calcula, para una rejilla de umbrales de reciprocal_overlap (y opcionalmente
-##  de jaccard/simpson), cuántos pares/aristas/clusters resultarían si se
-##  aplicara la reducción a los TADs. Sirve para ELEGIR el umbral mirando datos.
+##  Este script realiza un análisis exploratorio de umbrales de solapamiento
+##  recíproco para evaluar su efecto sobre la reducción de redundancia de TADs.
 ##
-##  Reaprovecha la MISMA lógica de métricas que ya usas para CRMs:
-##    overlap_length, jaccard, simpson, reciprocal_overlap
+##  Para una rejilla de umbrales, calcula el número de pares solapantes,
+##  aristas, clústeres y entidades fusionadas que se obtendrían bajo distintos
+##  criterios de similitud.
 ##
-##  Dependencias: data.table, GenomicRanges, igraph
+##  El objetivo es apoyar la selección del umbral mediante resúmenes
+##  cuantitativos, sin modificar ni reducir definitivamente las anotaciones.
+##
+##  Métricas calculadas:
+##    overlap_length, Jaccard, Simpson y reciprocal_overlap.
+##
+##  Dependencias:
+##    data.table, GenomicRanges, igraph.
 ################################################################################
 
 suppressPackageStartupMessages({
@@ -19,8 +25,8 @@ suppressPackageStartupMessages({
 })
 
 ## ----------------------------------------------------------------------------
-## 1) Calcular TODOS los pares solapados con sus métricas (una sola vez).
-##    Esto es lo costoso; se hace UNA vez y luego se filtra por cada umbral.
+## 1) Cálculo de pares solapantes y métricas de similitud.
+##    Este paso se realiza una sola vez; posteriormente se filtra por umbral.
 ## ----------------------------------------------------------------------------
 
 #' Calcula pares solapados (i<j) y sus métricas de similitud para un conjunto.
@@ -41,7 +47,7 @@ compute_overlap_pairs_metrics <- function(dt) {
   hits <- findOverlaps(gr, gr, ignore.strand = TRUE)
   qh <- queryHits(hits); sh <- subjectHits(hits)
 
-  keep <- qh < sh           # sólo pares i<j (sin auto-pares ni simétricos)
+  keep <- qh < sh           # pares i<j, sin autopares ni duplicados simétricos
   qh <- qh[keep]; sh <- sh[keep]
 
   if (length(qh) == 0L) {
@@ -75,12 +81,12 @@ compute_overlap_pairs_metrics <- function(dt) {
 }
 
 ## ----------------------------------------------------------------------------
-## 2) Dado un conjunto de aristas (pares que pasan un criterio), contar clusters.
+## 2) Conteo de clústeres a partir de un conjunto de aristas.
 ## ----------------------------------------------------------------------------
 
-#' Cuenta componentes conexas (clusters) dado el universo de IDs y las aristas.
+#' Cuenta componentes conexas a partir del universo de IDs y las aristas.
 #'
-#' @param all_ids vector con TODOS los IDs (define nodos, incl. singletons).
+#' @param all_ids vector con todos los IDs, incluidos singletons.
 #' @param edges   data.table con columnas id_i,id_j (puede estar vacía).
 #' @return lista: n_clusters, sizes (vector de tamaños de cada cluster)
 count_clusters <- function(all_ids, edges) {
@@ -99,18 +105,17 @@ count_clusters <- function(all_ids, edges) {
 }
 
 ## ----------------------------------------------------------------------------
-## 3) BARRIDO DE UMBRALES (la función principal de exploración).
+## 3) Barrido de umbrales.
 ## ----------------------------------------------------------------------------
 
-#' Barre umbrales de reciprocal_overlap (y similitud) sobre los TADs.
+#' Evalúa una rejilla de umbrales de reciprocal_overlap y similitud sobre TADs.
 #'
 #' Para cada umbral de recíproco evalúa DOS escenarios de "arista":
 #'   (A) "reciprocal_only": arista si reciprocal_overlap >= thr_recip
-#'       -> mide redundancia por solapamiento recíproco puro (recomendado
-#'          como primer diagnóstico para TADs).
+#'       -> evalúa la redundancia mediante solapamiento recíproco puro.
 #'   (B) "recip_plus_sim": arista si reciprocal_overlap >= thr_recip Y
 #'          (jaccard >= jaccard_thr O simpson >= simpson_thr)
-#'       -> replica el estilo de criterio que usas en CRMs, por comparación.
+#'       -> reproduce el criterio compuesto usado en CRMs con fines comparativos.
 #'
 #' @param tad_unique   data.table TADs colapsados (chr,start,end,ID).
 #' @param recip_grid   vector de umbrales de reciprocal_overlap a probar.
@@ -129,11 +134,11 @@ sweep_tad_thresholds <- function(tad_unique,
   all_ids <- dt$ID
   n_input <- length(all_ids)
 
-  message("[sweep] Calculando pares solapados y métricas (una sola vez)...")
+  message("[sweep] Calculando pares solapados y métricas...")
   pairs <- compute_overlap_pairs_metrics(dt)
   message("[sweep] Pares solapados (i<j): ", nrow(pairs))
 
-  # Función interna que evalúa un escenario+umbral y devuelve una fila resumen
+  # Función interna para evaluar un escenario y un umbral.
   eval_one <- function(scenario, thr) {
     if (nrow(pairs) == 0L) {
       edges <- pairs
@@ -146,7 +151,7 @@ sweep_tad_thresholds <- function(tad_unique,
 
     cl <- count_clusters(all_ids, edges)
     sizes <- cl$sizes
-    merged <- sizes[sizes > 1L]   # clusters que realmente fusionan >1 TAD
+    merged <- sizes[sizes > 1L]   # clústeres que fusionan más de un TAD
 
     data.table(
       scenario             = scenario,
@@ -155,10 +160,10 @@ sweep_tad_thresholds <- function(tad_unique,
       n_pairs_overlap      = nrow(pairs),
       n_edges              = nrow(edges),
       n_clusters           = cl$n_clusters,
-      n_merged_clusters    = length(merged),               # nº de grupos fusionados
+      n_merged_clusters    = length(merged),               # número de grupos fusionados
       max_cluster_size     = if (length(sizes)) max(sizes) else 0L,
       n_entities_in_merges = if (length(merged)) sum(merged) else 0L,
-      # reduction_ratio: fracción de TADs eliminados si se redujera con este umbral
+      # fracción de TADs eliminados bajo este umbral
       reduction_ratio      = 1 - cl$n_clusters / n_input
     )
   }
@@ -175,11 +180,11 @@ sweep_tad_thresholds <- function(tad_unique,
 }
 
 ## ----------------------------------------------------------------------------
-## 4) AYUDA: distribución de reciprocal_overlap (para elegir el grid con criterio)
+## 4) Distribución de reciprocal_overlap para orientar la selección de umbrales
 ## ----------------------------------------------------------------------------
 
 #' Devuelve la distribución del reciprocal_overlap de los pares solapados.
-#' Útil para ver dónde se concentran los valores antes de elegir umbral.
+#' Resume la concentración de valores antes de seleccionar una rejilla de umbrales.
 #'
 #' @param tad_unique data.table TADs (chr,start,end,ID).
 #' @param probs      cuantiles a reportar.
@@ -204,27 +209,27 @@ describe_tad_overlap <- function(tad_unique,
 }
 
 ## ============================================================================
-## EJEMPLO DE USO (exploratorio)
+## Ejemplo de uso exploratorio
 ## ----------------------------------------------------------------------------
-## # tad_unique ya lo tienes en memoria de tu pipeline actual.
+## # tad_unique debe estar cargado en memoria.
 ##
-## # (a) Mira primero la distribución de solapamiento recíproco:
+## # (a) Resumen de la distribución de solapamiento recíproco:
 ## desc <- describe_tad_overlap(tad_unique)
 ## print(desc$summary)
 ##
-## # (b) Barre umbrales y compara escenarios:
+## # (b) Barrido de umbrales y comparación de escenarios:
 ## sweep <- sweep_tad_thresholds(
 ##   tad_unique,
 ##   recip_grid = c(0.50, 0.60, 0.70, 0.80, 0.90)
 ## )
 ## print(sweep)
 ##
-## # Interpretación rápida de columnas:
+## # Interpretación de columnas:
 ## #   n_clusters           -> nº de TADs que quedarían tras reducir
 ## #   n_merged_clusters    -> cuántos grupos fusionan >1 TAD
-## #   max_cluster_size     -> el grupo más grande (¿hay sobre-fusión?)
+## #   max_cluster_size     -> tamaño del grupo más grande.
 ## #   reduction_ratio      -> fracción de TADs eliminados
 ## #
-## # Elige el umbral donde la reducción "estabiliza" sin que max_cluster_size
-## # se dispare (señal de fusiones excesivas por heterogeneidad de fuentes).
+## # Seleccionar un umbral en el que la reducción se estabilice sin un aumento
+## # excesivo de max_cluster_size.
 ## ============================================================================

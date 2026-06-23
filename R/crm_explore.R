@@ -1,18 +1,18 @@
 ################################################################################
-##  EXPLORACIÓN DE REDUNDANCIA DE CRMs A GRAN ESCALA
+##  crm_explore.R — Exploración de redundancia de CRMs y cálculo de aristas
 ##  --------------------------------------------------------------------------
-##  Adaptado al volumen real (chr8: ~1.34M CRMs, ~212M pares solapados).
+##  Este script contiene funciones auxiliares para explorar la redundancia de
+##  CRMs a gran escala y calcular pares de regiones solapantes mediante
+##  procesamiento por bloques.
 ##
-##  Diferencias clave respecto a las funciones de TADs:
-##    - Cálculo de pares POR BLOQUES (no materializa los 212M de pares a la vez;
-##      filtra al vuelo y sólo acumula las aristas que pasan el criterio).
-##    - Criterio COMPUESTO de CRMs (del documento del TFM):
-##        arista si reciprocal_overlap >= thr_recip
-##                Y (jaccard >= jaccard_thr O simpson >= simpson_thr)
-##      (a diferencia de TADs, donde se usó recíproco puro).
-##    - Selector de REGIÓN contigua para muestrear preservando solapamientos.
+##  Incluye:
+##    - selección de ventanas genómicas contiguas para análisis exploratorios;
+##    - cálculo eficiente de aristas de redundancia entre CRMs;
+##    - muestreo de pares solapantes para resumir distribuciones de métricas;
+##    - análisis de sensibilidad de umbrales.
 ##
-##  Dependencias: data.table, GenomicRanges, igraph
+##  Dependencias:
+##    data.table, GenomicRanges e igraph.
 ################################################################################
 
 suppressPackageStartupMessages({
@@ -28,7 +28,7 @@ suppressPackageStartupMessages({
 ## ============================================================================
 ## 1) SELECTOR DE REGIÓN CONTIGUA (muestreo que preserva solapamientos)
 ## ----------------------------------------------------------------------------
-## NO usar muestreo aleatorio de CRMs: rompería los solapamientos. Se extrae
+## Se evita el muestreo aleatorio de CRMs, ya que alteraría los solapamientos. Se extrae
 ## una ventana genómica contigua [from, to], conservando todos los CRMs que
 ## la solapan, de modo que la estructura de redundancia queda intacta.
 ## ============================================================================
@@ -36,7 +36,7 @@ suppressPackageStartupMessages({
 #' Extrae los CRMs de una ventana genómica contigua.
 #'
 #' @param dt   data.table con chr,start,end,ID (+ metadatos).
-#' @param chr  cromosoma (p.ej. "chr8").
+#' @param chr  cromosoma (por ejemplo "chr8").
 #' @param from inicio de la ventana (pb).
 #' @param to   fin de la ventana (pb).
 #' @param mode "overlap" conserva CRMs que solapan la ventana (recomendado);
@@ -58,7 +58,7 @@ subset_region <- function(dt, chr, from, to, mode = c("overlap", "contained")) {
 }
 
 ## ============================================================================
-## 2) CÁLCULO DE PARES POR BLOQUES CON FILTRADO AL VUELO
+## 2) CÁLCULo DE PARES POR BLOQUES CON FILTRADo AL VUELO
 ## ----------------------------------------------------------------------------
 ## Procesa los hits de findOverlaps en trozos. Para cada trozo calcula las
 ## métricas y descarta de inmediato los pares que no cumplen el criterio,
@@ -69,14 +69,14 @@ subset_region <- function(dt, chr, from, to, mode = c("overlap", "contained")) {
 #' Calcula aristas de redundancia de CRMs por bloques (filtrado al vuelo).
 #'
 #' @param dt          data.table no redundante (chr,start,end,ID).
-#' @param thr_recip   umbral de reciprocal_overlap (def. 0.50, del documento).
-#' @param jaccard_thr umbral de jaccard (def. 0.70).
-#' @param simpson_thr umbral de simpson (def. 0.99).
-#' @param criterion   "composite" (recíproco Y (J o S); criterio del documento)
+#' @param thr_recip   umbral de reciprocal_overlap (por defecto 0.50, definido para el análisis).
+#' @param jaccard_thr umbral de jaccard (por defecto 0.70).
+#' @param simpson_thr umbral de simpson (por defecto 0.99).
+#' @param criterion   "composite" (recíproco y (J o S); criterio definido para el análisis)
 #'                    o "reciprocal_only" (sólo recíproco; para comparar).
 #' @param keep_metrics si TRUE, conserva las métricas en las aristas (útil para
 #'                    inspección); si FALSE, sólo id_i,id_j (más ligero).
-#' @param chunk_size  nº de hits a procesar por bloque (def. 5e6).
+#' @param chunk_size  número de hits a procesar por bloque (por defecto 5e6).
 #' @return data.table de aristas que pasan el criterio:
 #'         id_i,id_j (+ métricas si keep_metrics=TRUE).
 compute_crm_edges_chunked <- function(dt,
@@ -168,17 +168,17 @@ compute_crm_edges_chunked <- function(dt,
 }
 
 ## ============================================================================
-## 3) DISTRIBUCIÓN DE MÉTRICAS (sobre una muestra de pares, para no materializar)
+## 3) Distribución de métricas sobre una muestra de pares
 ## ----------------------------------------------------------------------------
 ## Para describir la distribución sin materializar 212M de pares, se toma una
-## muestra ALEATORIA DE PARES (no de CRMs) y se calculan sus métricas. Esto sí
+## muestra aleatoria de pares, no de CRMs, y se calculan sus métricas. Este enfoque
 ## es estadísticamente válido para describir la distribución de solapamientos.
 ## ============================================================================
 
 #' Distribución de métricas sobre una muestra aleatoria de pares solapados.
 #'
 #' @param dt        data.table de CRMs (idealmente una región).
-#' @param n_sample  nº de pares a muestrear para la distribución (def. 2e6).
+#' @param n_sample  número de pares a muestrear para la distribución (por defecto 2e6).
 #' @param probs     cuantiles a reportar.
 #' @return data.table con cuantiles de recíproco, jaccard, simpson.
 describe_crm_overlap <- function(dt, n_sample = 2e6,
@@ -216,7 +216,7 @@ describe_crm_overlap <- function(dt, n_sample = 2e6,
 }
 
 ## ============================================================================
-## 4) BARRIDO DE UMBRALES (sobre una región, criterio compuesto de CRMs)
+## 4) BARRIDo DE UMBRALES (sobre una región, criterio compuesto de CRMs)
 ## ----------------------------------------------------------------------------
 ## Para cada umbral recíproco evalúa el criterio compuesto y cuenta clusters
 ## (componentes conexas), reportando el diagnóstico de chaining clave:
@@ -266,17 +266,17 @@ sweep_crm_thresholds <- function(dt,
 }
 
 ## ============================================================================
-## EJEMPLO DE USO
+## Ejemplo de uso
 ## ----------------------------------------------------------------------------
 ## source("crm_explore.R")
 ##
-## # 1) Extraer la región más densa (chr8:125-130 Mb, ~104K CRMs):
+## # 1) Extraer una región de alta densidad para exploración:
 ## reg <- subset_region(enh_unique, "chr8", 125e6, 130e6)
 ##
 ## # 2) Distribución de métricas en la región:
 ## print(describe_crm_overlap(reg))
 ##
-## # 3) Barrido de umbrales con el criterio compuesto del documento:
+## # 3) Barrido de umbrales con el criterio compuesto definido para el análisis:
 ## sw <- sweep_crm_thresholds(reg, recip_grid = c(0.50,0.60,0.70,0.80,0.90))
 ## print(sw)
 ## # Vigilar max_cluster_size: si a 0.50 se dispara, hay chaining en zonas densas.

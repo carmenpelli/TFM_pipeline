@@ -1,23 +1,23 @@
 ################################################################################
-##  COMPARACIÓN DE ESTRATEGIAS ANTI-CHAINING PARA CRMs
+##  crm_compare_strategies.R — Comparación de estrategias de agrupamiento de CRMs
 ##  --------------------------------------------------------------------------
-##  Compara, sobre una región, dos formas de evitar el chaining detectado:
+##  Este script compara, sobre una región genómica, distintas estrategias para
+##  limitar el encadenamiento transitivo durante el agrupamiento de CRMs.
 ##
-##    Estrategia A — SEPARAR POR ESCALA:
-##      Aparta los CRM grandes (> size_thr) como categoría "regiones densas /
-##      candidatos a super-enhancer" y aplica el clustering SOLO a los CRM
-##      normales. size_thr por defecto = 12500 pb (escala del documento del TFM,
-##      DOI 10.1080/15592294.2018.1514231; reutilizada como frontera de tamaño).
-##      Dentro de los normales puede usar componentes conexas o anti-chaining.
+##  Estrategia A — Separación por escala:
+##    Los CRMs de mayor tamaño se analizan como un conjunto diferenciado, y el
+##    agrupamiento se aplica al subconjunto restante. El umbral de tamaño por
+##    defecto es 12.500 pb.
 ##
-##    Estrategia B — ANTI-CHAINING SOBRE TODO:
-##      Clustering greedy anti-chaining sobre el conjunto completo, sin separar.
-##      Rompe cadenas exigiendo similitud recíproca CONTRA EL REPRESENTANTE.
+##  Estrategia B — Anti-chaining global:
+##    Se aplica un agrupamiento greedy sobre el conjunto completo, exigiendo
+##    similitud suficiente respecto al representante de cada clúster.
 ##
-##  Ambas reutilizan compute_crm_edges_chunked() (crm_explore.R) para no
-##  materializar los millones de pares.
+##  Ambas estrategias reutilizan compute_crm_edges_chunked() para calcular las
+##  aristas filtradas sin materializar todos los pares simultáneamente.
 ##
-##  Dependencias: data.table, GenomicRanges, igraph
+##  Dependencias:
+##    data.table, GenomicRanges, igraph.
 ################################################################################
 
 suppressPackageStartupMessages({
@@ -31,7 +31,7 @@ if (!exists(".msg")) .msg <- function(...) {
 }
 
 ## ----------------------------------------------------------------------------
-## Utilidad: tamaños de cluster a partir de un membership.
+## Utilidad para resumir tamaños de clúster a partir de una tabla de pertenencia.
 ## ----------------------------------------------------------------------------
 .cluster_size_stats <- function(membership, n_input) {
   sizes <- membership[, .(n = .N), by = cluster_id]$n
@@ -44,22 +44,22 @@ if (!exists(".msg")) .msg <- function(...) {
 }
 
 ## ============================================================================
-## CLUSTERING ANTI-CHAINING (greedy por representante) — versión escalable.
-## Recibe ARISTAS ya filtradas (no recalcula pares). Cada CRM no asignado, en
-## orden de mayor a menor tamaño, abre un cluster y absorbe a sus vecinos no
-## asignados (vecinos = pares que ya pasaron el criterio recíproco contra él).
+## Agrupamiento anti-chaining mediante estrategia greedy por representante.
+## Recibe aristas ya filtradas y evita recalcular pares. Los CRMs se recorren
+## por tamaño decreciente; cada CRM no asignado inicia un clúster y agrupa sus
+## vecinos no asignados.
 ## ============================================================================
 
 #' Anti-chaining greedy a partir de aristas ya filtradas.
 #'
 #' @param dt    data.table de CRMs (chr,start,end,ID).
 #' @param edges data.table de aristas (id_i,id_j) que pasan el criterio.
-#' @return data.table membership (ID, cluster_id, representative_id).
+#' @return data.table membership con ID, cluster_id y representative_id.
 anti_chaining_from_edges <- function(dt, edges) {
   dt <- as.data.table(dt)
   dt[, length := end - start + 1L]
 
-  # Adyacencia bidireccional (sólo aristas válidas)
+  # Adyacencia bidireccional basada en aristas válidas.
   if (nrow(edges) > 0L) {
     adj <- rbind(
       edges[, .(from = id_i, to = id_j)],
@@ -70,7 +70,7 @@ anti_chaining_from_edges <- function(dt, edges) {
     adj <- data.table(from = character(), to = character()); setkey(adj, from)
   }
 
-  # Semillas: de mayor a menor tamaño (el grande define el cluster)
+  # Semillas ordenadas de mayor a menor tamaño.
   seed_order <- dt[order(-length)]$ID
 
   assigned   <- setNames(rep(FALSE, nrow(dt)), dt$ID)
@@ -105,7 +105,7 @@ anti_chaining_from_edges <- function(dt, edges) {
 }
 
 ## ----------------------------------------------------------------------------
-## Componentes conexas a partir de aristas ya filtradas.
+## Componentes conexas a partir de aristas previamente filtradas.
 ## ----------------------------------------------------------------------------
 connected_from_edges <- function(dt, edges) {
   all_ids <- as.data.table(dt)$ID
@@ -144,7 +144,7 @@ compare_crm_strategies <- function(dt,
   dt[, length := end - start + 1L]
   n_input <- nrow(dt)
 
-  ## --- Aristas del conjunto COMPLETO (una vez, criterio compuesto) ----------
+  ## --- Aristas del conjunto completo, calculadas una sola vez ----------------
   .msg("Calculando aristas del conjunto completo...")
   edges_all <- compute_crm_edges_chunked(
     dt, thr_recip = thr_recip, jaccard_thr = jaccard_thr,
@@ -155,7 +155,7 @@ compare_crm_strategies <- function(dt,
   rows <- list()
   memberships <- list()
 
-  ## === BASELINE: componentes conexas sobre todo (lo que ya vimos) ==========
+  ## === Escenario de referencia: componentes conexas sobre el conjunto completo ===
   m_cc <- connected_from_edges(dt, edges_all)
   st <- .cluster_size_stats(m_cc, n_input)
   rows[["baseline_connected"]] <- cbind(
@@ -163,7 +163,7 @@ compare_crm_strategies <- function(dt,
                n_large_aside = 0L), st)
   memberships[["baseline_connected"]] <- m_cc
 
-  ## === ESTRATEGIA B: anti-chaining sobre todo ==============================
+  ## === Estrategia B: anti-chaining sobre el conjunto completo ===============
   .msg("Estrategia B: anti-chaining sobre el conjunto completo...")
   m_ac <- anti_chaining_from_edges(dt, edges_all)
   st <- .cluster_size_stats(m_ac[, .(cluster_id)], n_input)
@@ -172,8 +172,8 @@ compare_crm_strategies <- function(dt,
                n_large_aside = 0L), st)
   memberships[["B_antichaining_all"]] <- m_ac
 
-  ## === ESTRATEGIA A: separar por escala ====================================
-  ## Aparta CRM grandes; clustering (anti-chaining) sólo sobre los normales.
+  ## === Estrategia A: separación por escala =================================
+  ## Se separan los CRMs de mayor tamaño y se agrupa el subconjunto restante.
   .msg("Estrategia A: separar por escala (size_thr=", size_thr, ")...")
   large_ids  <- dt[length > size_thr]$ID
   normal_dt  <- dt[length <= size_thr]
@@ -182,24 +182,23 @@ compare_crm_strategies <- function(dt,
        " (", round(100 * n_large / n_input, 2), "%). ",
        "Normales: ", nrow(normal_dt), ".")
 
-  # Aristas SÓLO entre CRM normales (recalcular sobre el subconjunto, para no
-  # arrastrar los puentes grandes que causaban el chaining)
+  # Aristas únicamente entre CRMs del subconjunto restante.
   edges_norm <- compute_crm_edges_chunked(
     normal_dt, thr_recip = thr_recip, jaccard_thr = jaccard_thr,
     simpson_thr = simpson_thr, criterion = "composite",
     keep_metrics = FALSE, chunk_size = chunk_size
   )
 
-  # A.1: separar + componentes conexas sobre normales
+  # A.1: separación por escala y componentes conexas en el subconjunto restante.
   m_a_cc <- connected_from_edges(normal_dt, edges_norm)
-  # los grandes van como singletons (cada uno su propio "cluster"/categoría)
+  # Los CRMs separados por tamaño se tratan como singletons.
   st <- .cluster_size_stats(m_a_cc[, .(cluster_id)], nrow(normal_dt))
   rows[["A_separate_connected"]] <- cbind(
     data.table(strategy = "A_separate_connected", n_input = n_input,
                n_large_aside = n_large), st)
   memberships[["A_separate_connected_normals"]] <- m_a_cc
 
-  # A.2: separar + anti-chaining sobre normales
+  # A.2: separación por escala y anti-chaining en el subconjunto restante.
   m_a_ac <- anti_chaining_from_edges(normal_dt, edges_norm)
   st <- .cluster_size_stats(m_a_ac[, .(cluster_id)], nrow(normal_dt))
   rows[["A_separate_antichaining"]] <- cbind(
@@ -214,7 +213,7 @@ compare_crm_strategies <- function(dt,
 }
 
 ## ============================================================================
-## EJEMPLO DE USO
+## Ejemplo de uso
 ## ----------------------------------------------------------------------------
 ## source("crm_explore.R")
 ## source("crm_compare_strategies.R")
@@ -223,14 +222,14 @@ compare_crm_strategies <- function(dt,
 ##
 ## cmp <- compare_crm_strategies(reg, thr_recip = 0.50, size_thr = 12500)
 ## print(cmp$comparison)
-## # Columnas clave:
-## #   max_cluster_size -> el detector de chaining. Bajará mucho en A y B
-## #                       respecto al baseline (17670).
-## #   n_large_aside    -> cuántos CRM grandes se apartaron en la estrategia A.
+## # Columnas principales:
+## #   max_cluster_size permite detectar agrupamientos excesivamente grandes.
+## #   n_large_aside indica cuántos CRMs se separan por tamaño en la estrategia A.
 ## #
-## # Lectura:
-## #   - Si A_separate_* reduce max_cluster_size pero B_antichaining no tanto,
-## #     el problema eran los PUENTES grandes -> separar por escala es la clave.
-## #   - Si B ya controla el tamaño sin separar, el anti-chaining basta solo.
-## #   - Compara n_clusters y reduction_ratio para ver cuánto reduce cada una.
+## # Interpretación:
+## #   - Una reducción marcada de max_cluster_size tras separar por escala
+## #     sugiere que los CRMs de mayor tamaño contribuían al encadenamiento.
+## #   - Si la estrategia B controla el tamaño de los clústeres, el anti-chaining
+## #     puede ser suficiente sin separación previa.
+## #   - n_clusters y reduction_ratio permiten comparar la intensidad de reducción.
 ## ============================================================================

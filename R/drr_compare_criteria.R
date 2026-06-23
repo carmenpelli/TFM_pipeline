@@ -1,27 +1,20 @@
 ################################################################################
-##  COMPARACIÓN DE CRITERIOS PARA REGIONES REGULATORIAS DENSAS (DRRs)
+##  drr_compare_criteria.R — Comparación de criterios para definir DRRs
 ##  --------------------------------------------------------------------------
-##  Enfrenta dos formas de DEFINIR las regiones, ambas terminando en las MISMAS
-##  4 clases (Simple / Compact / Dense_complex / Extended_complex) para una
-##  comparación limpia:
+##  Este script compara dos estrategias para definir regiones reguladoras densas
+##  a partir de CRMs consenso:
 ##
-##    Criterio A — PROXIMIDAD (el antiguo, 06_detect_dense_regulatory_regions.R):
-##      Agrupa CRMs consecutivos con gap <= max_gap (12.5 kb).
-##      [Aviso: con datos densos (99.98% solapando) tiende a producir regiones
-##       gigantes; esta comparación sirve para CONFIRMARLO con números.]
+##    - criterio por proximidad, basado en la distancia entre CRMs consecutivos;
+##    - criterio por apilamiento, basado en bloques contiguos de solapamiento.
 ##
-##    Criterio B — APILAMIENTO (el nuevo, Opción A):
-##      Define regiones como BLOQUES de solapamiento contiguo (GenomicRanges
-##      reduce). La "densidad" surge de cuántos CRMs se apilan, no de proximidad.
+##  Ambas estrategias se resumen con una clasificación común de DRRs para
+##  facilitar la comparación entre resultados.
 ##
-##  Input: crm_reduced (de reduce_redundancy_crms).
-##    support = n_entities (CRMs reducidos del cluster)
-##    coordenada = repr_start / repr_end
+##  Las DRRs se interpretan como regiones estructuralmente densas definidas por
+##  el pipeline, no como super-enhancers funcionalmente validados.
 ##
-##  IMPORTANTE (biología, del documento): son CANDIDATOS estructurales /
-##  regiones reguladoras densas. NUNCA super-enhancers confirmados.
-##
-##  Dependencias: data.table, GenomicRanges
+##  Dependencias:
+##    data.table y GenomicRanges.
 ################################################################################
 
 suppressPackageStartupMessages({
@@ -34,7 +27,7 @@ if (!exists(".msg")) .msg <- function(...) {
 }
 
 ## ----------------------------------------------------------------------------
-## Clasificación en 4 clases (idéntica lógica al script antiguo).
+## Clasificación en 4 clases (idéntica lógica al script previo).
 ## Se factoriza para aplicarla igual a ambos criterios.
 ## ----------------------------------------------------------------------------
 .classify_drr <- function(drr) {
@@ -79,7 +72,7 @@ if (!exists(".msg")) .msg <- function(...) {
 }
 
 ## ============================================================================
-## CRITERIO A — PROXIMIDAD (stitching por gap <= max_gap)
+## CRITERIo A — PROXIMIDAD (stitching por gap <= max_gap)
 ## ============================================================================
 detect_drr_proximity <- function(crm_reduced,
                                  max_gap = 12500L,
@@ -116,15 +109,15 @@ detect_drr_proximity <- function(crm_reduced,
 }
 
 ## ============================================================================
-## CRITERIO B — APILAMIENTO (bloques de solapamiento contiguo)
+## CRITERIo B — APILAMIENTo (bloques de solapamiento contiguo)
 ## ============================================================================
 ## Define cada región como un bloque contiguo donde los CRMs se solapan/tocan.
-## La densidad (support/kb) discrimina dentro de esos bloques. Como TODO se
+## La densidad (support/kb) discrimina dentro de esos bloques. Como todo se
 ## solapa, habrá pocos bloques grandes; lo que varía es CUÁNTOS CRMs se apilan
 ## en cada tramo, capturado por support_crms y la densidad.
 ##
 ## Filtro de tamaño (literatura de super-enhancers, mediana SE 8.7-19 kb,
-## dominios SE hasta ~90 kb): las regiones > max_size_bp (def. 100 kb) se
+## dominios SE hasta ~90 kb): las regiones > max_size_bp (por defecto 100 kb) se
 ## marcan como "extensive_overlap" y se EXCLUYEN de la clasificación/validación
 ## (posibles artefactos de la alta densidad de solapamiento), pero se CONSERVAN.
 detect_drr_stacking <- function(crm_reduced,
@@ -205,21 +198,21 @@ compare_drr_criteria <- function(crm_reduced, max_gap = 12500L,
 }
 
 ## ============================================================================
-## EJEMPLO DE USO
+## Ejemplo de uso
 ## ----------------------------------------------------------------------------
 ## source("drr_compare_criteria.R")
 ##
 ## cmp <- compare_drr_criteria(red_crm$crm_reduced, max_gap = 12500)
 ##
-## print(cmp$comparison)        # tamaños y nº de regiones por criterio
+## print(cmp$comparison)        # tamaños y número de regiones por criterio
 ## print(cmp$by_class_prox)     # clases del criterio proximidad
 ## print(cmp$by_class_stack)    # clases del criterio apilamiento
 ##
 ## # Clave a mirar:
-## #   max_drr_length -> ¿alguna región es de megabases? (señal de chaining)
-## #   median_drr_length -> ¿tamaños biológicamente plausibles? (SEs: decenas kb)
-## #   distribución de clases -> ¿discrimina o todo cae en una clase?
+## #   max_drr_length → ¿alguna región es de megabases? (señal de chaining)
+## #   median_drr_length → ¿tamaños biológicamente plausibles? (SEs: decenas kb)
+## #   distribución de clases → ¿discrimina o todo cae en una clase?
 ## #
 ## # Luego, el criterio elegido se valida contra SEdb (drr_start/drr_end como
-## # candidate_start/candidate_end en tu script de validación).
+## # candidate_start/candidate_end en la versión previa de validación).
 ## ============================================================================

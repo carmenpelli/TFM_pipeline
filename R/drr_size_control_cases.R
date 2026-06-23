@@ -1,22 +1,15 @@
 ################################################################################
-##  CONTROL POR TAMAÑO + CASOS DESTACADOS DRR–SEdb
+##  drr_size_control_cases.R — Control por tamaño y casos destacados DRR-SEdb
 ##  --------------------------------------------------------------------------
-##  (A) CONTROL EMPAREJADO POR TAMAÑO:
-##      Compara solapamiento DRR–SEdb entre clases DENTRO de bins de longitud,
-##      para aislar el efecto "densidad" del efecto "tamaño". Responde:
-##      ¿a igualdad de tamaño, las DRR densas solapan más con SEdb?
+##  Este script evalúa la concordancia entre DRRs y SEdb controlando por longitud
+##  de las regiones, y genera tablas de casos destacados según criterios de
+##  solapamiento, recurrencia en contextos celulares y genes asociados.
 ##
-##  (B) CASOS DESTACADOS (validación cualitativa):
-##      Tabla de coincidencias DRR–SE notables según TRES criterios:
-##        1. Solape RECÍPROCO alto (coincidencia ajustada, no engullimiento).
-##        2. SE presente en MUCHOS contextos celulares (reproducibilidad).
-##        3. Genes conocidos asociados.
+##  El análisis permite separar parcialmente el efecto de la longitud de la DRR
+##  del efecto de la densidad estructural.
 ##
-##  Matiz honesto (para la memoria): SEdb y los CRMs comparten en parte fuentes
-##  (actividad regulatoria en líneas celulares), así que esto es RECUPERACIÓN
-##  de super-enhancers anotados, no validación experimental independiente.
-##
-##  Dependencias: data.table, GenomicRanges
+##  Dependencias:
+##    data.table y GenomicRanges.
 ################################################################################
 
 suppressPackageStartupMessages({
@@ -29,21 +22,21 @@ if (!exists(".msg")) .msg <- function(...) {
 }
 
 ## ============================================================================
-## (A) CONTROL EMPAREJADO POR TAMAÑO
+## (A) CONTROL EMPAREJADo POR TAMAÑO
 ## ============================================================================
 #' Compara solapamiento DRR–SEdb por clase, dentro de bins de longitud.
 #'
 #' @param drr     tabla DRRs (cmp$stacking); se excluye Extensive_overlap.
 #' @param overlap val$positional$overlap (drr_id, candidate_class, se_id).
 #' @param breaks  cortes de longitud (pb) para los bins.
-#' @return lista: per_drr (con bin y nº SE), by_bin_class (mediana SE por bin×clase),
+#' @return lista: per_drr (con bin y número SE), by_bin_class (mediana SE por bin×clase),
 #'         contrast (Dense_complex vs Simple dentro de cada bin).
 sedb_size_matched <- function(drr, overlap,
                               breaks = c(0, 1000, 2500, 5000, 10000, 25000,
                                          50000, 100000)) {
   cand <- drr[candidate_class != "Extensive_overlap", .(drr_id, candidate_class, drr_length)]
 
-  # nº de SE distintos por DRR (0 si no solapa)
+  # número de SE distintos por DRR (0 si no solapa)
   se_count <- overlap[, .(n_SE = uniqueN(se_id)), by = drr_id]
   cand <- merge(cand, se_count, by = "drr_id", all.x = TRUE)
   cand[is.na(n_SE), n_SE := 0L]
@@ -62,11 +55,11 @@ sedb_size_matched <- function(drr, overlap,
     frac_with_SE = mean(n_SE > 0)
   ), by = .(size_bin, candidate_class)][order(size_bin, candidate_class)]
 
-  # Contraste directo DENTRO de cada bin de tamaño.
-  # Se usa Dense_complex vs Extended_complex (NO vs Simple): a tamaños grandes
-  # casi no hay Simple_DRR, mientras que Dense y Extended coexisten en todos los
-  # bins y se diferencian precisamente en densidad. Es el contraste que aísla
-  # densidad de tamaño de forma fiable.
+  # Contraste directo dentro de cada bin de tamaño.
+  # Se utiliza Dense_complex frente a Extended_complex, ya que a tamaños grandes
+  # Simple_DRR está escasamente representada, mientras que Dense y Extended coexisten en los
+  # bins y se diferencian principalmente en densidad. Este contraste ayuda a aislar
+  # el efecto de densidad frente al efecto de tamaño.
   wide <- dcast(by_bin_class, size_bin ~ candidate_class,
                 value.var = "median_SE")
   contrast <- wide[, .(size_bin)]
@@ -96,7 +89,7 @@ sedb_size_matched <- function(drr, overlap,
 #' @param se_chr8    SEdb chr8 (de load_sedb_chr8): se_id, se_chr, se_start, se_end,
 #'                   cell_id, se_rank, se_gene_* ...
 #' @param genes_real opcional: salida de genes_in_drr() para añadir genes reales.
-#' @param top_n      nº de casos por criterio.
+#' @param top_n      número de casos por criterio.
 #' @return lista de data.tables: reciprocal, multicell, gene_centric.
 highlight_drr_se_cases <- function(drr, se_chr8, genes_real = NULL, top_n = 20) {
   cand <- drr[candidate_class != "Extensive_overlap"]
@@ -137,7 +130,7 @@ highlight_drr_se_cases <- function(drr, se_chr8, genes_real = NULL, top_n = 20) 
 
   ## --- Criterio 2: SE en muchos contextos celulares ------------------------
   ## Nº de contextos celulares distintos del SE region (mismo se_*coords) que
-  ## solapan cada DRR. Aproximamos por nº de cell_id distintos entre los SE
+  ## solapan cada DRR. Aproximamos por número de cell_id distintos entre los SE
   ## que solapan cada DRR.
   multicell <- pairs[, .(
     candidate_class = candidate_class[1L],
@@ -166,7 +159,7 @@ highlight_drr_se_cases <- function(drr, se_chr8, genes_real = NULL, top_n = 20) 
 }
 
 ## ============================================================================
-## EJEMPLO DE USO
+## Ejemplo de uso
 ## ----------------------------------------------------------------------------
 ## source("drr_sedb_validation.R")     # load_sedb_chr8, validate_drr_vs_sedb
 ## source("drr_gene_analysis.R")       # genes_in_drr
@@ -179,7 +172,7 @@ highlight_drr_se_cases <- function(drr, se_chr8, genes_real = NULL, top_n = 20) 
 ## sm <- sedb_size_matched(drr, val$positional$overlap)
 ## print(sm$by_bin_class)   # mediana de SE por bin de longitud × clase
 ## print(sm$contrast)       # Dense_complex / Simple dentro de cada bin
-## # Lectura: si dense_vs_simple_median > 1 DENTRO de los bins, la densidad
+## # Interpretación: valores superiores a 1 indican mayor concordancia en la
 ## # aporta señal independiente del tamaño. Si ~1 o <1, el efecto era tamaño.
 ##
 ## ## (B) Casos destacados:

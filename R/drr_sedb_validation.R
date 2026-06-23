@@ -1,22 +1,19 @@
 ################################################################################
-##  VALIDACIÓN DE DRRs (criterio B, apilamiento) CONTRA SEdb
+##  drr_sedb_validation.R — Comparación de DRRs con anotaciones de SEdb
 ##  --------------------------------------------------------------------------
-##  Adapta la validación SEdb antigua a la salida del pipeline nuevo:
-##    - DRRs: cmp$stacking (criterio apilamiento), excluyendo Extensive_overlap.
-##    - CRMs reducidos: red_crm$crm_reduced  (cluster_id, repr_*, n_entities...)
-##    - Trazabilidad CRM original->cluster: red_crm$mapping (original_id, cluster_id)
-##    - enh2gene: relación crm original -> gen
+##  Este script compara las DRRs generadas por el pipeline con anotaciones de
+##  super-enhancers recopiladas en SEdb.
 ##
-##  Valida dos cosas:
-##    (1) Solapamiento posicional DRR vs super-enhancers de SEdb, por clase.
-##        Hipótesis: Dense_complex se enriquece frente a Simple.
-##    (2) Recuperación génica: genes ligados a nuestras DRRs vs genes SEdb.
+##  Incluye:
+##    - solapamiento posicional entre DRRs y regiones de SEdb;
+##    - resumen de concordancia por clase de DRR;
+##    - comparación génica cuando se dispone de relaciones CRM-gen.
 ##
-##  RECORDATORIO (documento): son candidatos estructurales / regiones densas,
-##  NUNCA super-enhancers confirmados. SEdb sirve como validación cruzada
-##  posicional, no como verdad biológica absoluta.
+##  La comparación con SEdb se interpreta como concordancia posicional y génica,
+##  no como validación funcional independiente.
 ##
-##  Dependencias: data.table, GenomicRanges
+##  Dependencias:
+##    data.table y GenomicRanges.
 ################################################################################
 
 suppressPackageStartupMessages({
@@ -29,7 +26,7 @@ if (!exists(".msg")) .msg <- function(...) {
 }
 
 ## ----------------------------------------------------------------------------
-## 1) Cargar y limpiar SEdb (chr8). Reutiliza tu lógica de limpieza de comillas.
+## 1) Cargar y limpiar SEdb (chr8). Reutiliza la lógica previa de limpieza de comillas.
 ## ----------------------------------------------------------------------------
 load_sedb <- function(bed_path = "SEdb_Human_SE.bed", chr = "chr8") {
   se <- fread(bed_path, sep = "\t", header = TRUE, quote = "", fill = TRUE)
@@ -42,7 +39,7 @@ load_sedb <- function(bed_path = "SEdb_Human_SE.bed", chr = "chr8") {
 
   se_chr <- se[se_chr == chr]
   if (nrow(se_chr) == 0L) {
-    .msg("AVISO: 0 super-enhancers de SEdb para '", chr, "'. ",
+    .msg("Advertencia: 0 super-enhancers de SEdb para '", chr, "'. ",
          "Cromosomas disponibles en el BED: ",
          paste(head(sort(unique(se$se_chr)), 30), collapse = ", "),
          ". Revisa la nomenclatura (¿'chr8' vs '8'?).")
@@ -51,8 +48,8 @@ load_sedb <- function(bed_path = "SEdb_Human_SE.bed", chr = "chr8") {
   se_chr[]
 }
 
-## Alias retrocompatible: el código antiguo llamaba load_sedb_chr8(bed_path).
-## Por defecto mantiene chr8, pero ahora acepta 'chr' para no quedar fijado.
+## Alias de compatibilidad con versiones previas.
+## Por defecto mantiene chr8 y permite especificar el cromosoma.
 load_sedb_chr8 <- function(bed_path = "SEdb_Human_SE.bed", chr = "chr8") {
   load_sedb(bed_path = bed_path, chr = chr)
 }
@@ -61,7 +58,7 @@ load_sedb_chr8 <- function(bed_path = "SEdb_Human_SE.bed", chr = "chr8") {
 ## 2) Validación POSICIONAL: solapamiento DRR vs SEdb, enriquecimiento por clase.
 ## ----------------------------------------------------------------------------
 validate_drr_vs_sedb <- function(drr, se_chr8) {
-  # Sólo candidatas (excluye Extensive_overlap)
+  # Se excluyen regiones clasificadas como Extensive_overlap.
   cand <- drr[candidate_class != "Extensive_overlap"]
 
   drr_gr <- GRanges(cand$chr, IRanges(cand$drr_start, cand$drr_end),
@@ -90,7 +87,7 @@ validate_drr_vs_sedb <- function(drr, se_chr8) {
   by_class[is.na(n_with_ovl), n_with_ovl := 0L]
   by_class[, fraction_with_SE := n_with_ovl / n_total]
 
-  # Intensidad: nº de SE distintos y contextos celulares por DRR
+  # Intensidad: número de SE distintos y contextos celulares por DRR
   intensity <- overlap[, .(
     n_SE_overlaps   = uniqueN(se_id),
     n_cell_contexts = uniqueN(cell_id),
@@ -104,7 +101,7 @@ validate_drr_vs_sedb <- function(drr, se_chr8) {
     median_cell_contexts       = median(n_cell_contexts)
   ), by = candidate_class]
 
-  # Enriquecimiento vs Simple_DRR (igual que tu script antiguo)
+  # Enriquecimiento vs Simple_DRR (igual que la versión previa previo)
   base_simple <- intensity_summary[candidate_class == "Simple_DRR",
                                    median_SE_overlaps_per_DRR]
   if (length(base_simple) == 1L && base_simple > 0) {
@@ -120,7 +117,7 @@ validate_drr_vs_sedb <- function(drr, se_chr8) {
 }
 
 ## ----------------------------------------------------------------------------
-## 3) Construir el enlace DRR -> clusters -> CRMs originales -> genes.
+## 3) Construir el enlace DRR → clusters → CRMs originales → genes.
 ## ----------------------------------------------------------------------------
 ## Para asignar genes a cada DRR necesitamos saber qué clusters (CRMs reducidos)
 ## caen en cada DRR. Lo hacemos por solapamiento posicional entre la coordenada
@@ -131,7 +128,7 @@ link_drr_to_genes <- function(drr, crm_reduced, mapping, enh2gene,
 
   cand <- drr[candidate_class != "Extensive_overlap"]
 
-  # a) DRR <-> cluster por solapamiento de coordenadas
+  # a) DRR <→ cluster por solapamiento de coordenadas
   drr_gr <- GRanges(cand$chr, IRanges(cand$drr_start, cand$drr_end),
                     drr_id = cand$drr_id, candidate_class = cand$candidate_class)
   cl_gr  <- GRanges(crm_reduced$chr,
@@ -144,17 +141,17 @@ link_drr_to_genes <- function(drr, crm_reduced, mapping, enh2gene,
     cluster_id      = mcols(cl_gr)$cluster_id[subjectHits(ov)]
   )
 
-  # b) cluster <-> CRM original (mapping: original_id, cluster_id)
+  # b) cluster <→ CRM original (mapping: original_id, cluster_id)
   map <- as.data.table(mapping)[, .(cluster_id, original_id)]
 
-  # c) CRM original <-> gen (enh2gene)
+  # c) CRM original <→ gen (enh2gene)
   e2g <- as.data.table(copy(enh2gene))
   setnames(e2g, old = c(crm_id_col, gene_col),
            new = c("original_id", "gene_symbol"), skip_absent = TRUE)
   e2g <- e2g[!is.na(original_id) & !is.na(gene_symbol) & gene_symbol != "",
              .(original_id, gene_symbol)]
 
-  # Encadenar: drr -> cluster -> crm -> gen
+  # Encadenar: drr → cluster → crm → gen
   dcg <- merge(drr_cluster, map, by = "cluster_id", allow.cartesian = TRUE)
   dcg <- merge(dcg, e2g, by = "original_id", allow.cartesian = TRUE)
   dcg <- unique(dcg[, .(drr_id, candidate_class, gene_symbol)])
@@ -235,9 +232,9 @@ run_sedb_validation <- function(drr, crm_reduced, mapping, enh2gene,
     return(list(positional = pos, genes_per_drr = NULL, genic = NULL))
   }
 
-  # Comprobación de columnas de enh2gene (error claro si no cuadran)
+  # Comprobación de columnas de enh2gene.
   if (!all(c(crm_id_col, gene_col) %in% names(enh2gene))) {
-    .msg("AVISO: enh2gene no tiene las columnas '", crm_id_col, "' / '", gene_col,
+    .msg("Advertencia: enh2gene no tiene las columnas '", crm_id_col, "' / '", gene_col,
          "'. Columnas disponibles: ", paste(names(enh2gene), collapse = ", "),
          ". Se omite la parte génica.")
     return(list(positional = pos, genes_per_drr = NULL, genic = NULL))
@@ -258,7 +255,7 @@ run_sedb_validation <- function(drr, crm_reduced, mapping, enh2gene,
 }
 
 ## ============================================================================
-## EJEMPLO DE USO
+## Ejemplo de uso
 ## ----------------------------------------------------------------------------
 ## source("drr_compare_criteria.R")
 ## source("drr_sedb_validation.R")
@@ -271,8 +268,8 @@ run_sedb_validation <- function(drr, crm_reduced, mapping, enh2gene,
 ##   mapping     = red_crm$mapping,
 ##   enh2gene    = enh2gene,
 ##   bed_path    = "SEdb_Human_SE.bed",
-##   crm_id_col  = "crm_ID",                  # ajusta al nombre real
-##   gene_col    = "hgnc_symbol_target_genes" # ajusta al nombre real
+##   crm_id_col  = "crm_ID",                  # adaptar al nombre de columna correspondiente
+##   gene_col    = "hgnc_symbol_target_genes" # adaptar al nombre de columna correspondiente
 ## )
 ##
 ## print(val$positional$by_class)            # fracción con solape SEdb por clase
