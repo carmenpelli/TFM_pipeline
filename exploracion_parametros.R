@@ -1,36 +1,41 @@
 ################################################################################
-##  exploracion_parametros.R — JUSTIFICACIÓN ESTADÍSTICA DE LOS PARÁMETROS
+##  exploracion_parametros.R — Exploración y justificación de parámetros
 ##  ==========================================================================
-##  Reproduce y formaliza la exploración que llevó a elegir los umbrales del
-##  criterio compuesto de reducción de CRMs:
-##      arista si  reciprocal_overlap >= 0.50
-##                 Y (jaccard >= 0.70  O  simpson >= 0.99)
+##  Este script reproduce la exploración utilizada para seleccionar los umbrales
+##  del criterio compuesto de reducción de CRMs:
 ##
-##  Produce tres bloques de evidencia, cada uno con su test:
-##    (A) Distribución de las métricas de solapamiento (recíproco, Jaccard,
-##        Simpson, Dice) sobre los pares solapados reales -> justifica los
-##        umbrales a partir de la forma de las distribuciones.
-##    (B) Redundancia entre métricas: por qué se DESCARTA Dice (es una función
-##        monótona de Jaccard, Dice = 2J/(1+J)) y qué aporta cada métrica
-##        retenida. Tests: correlación de Spearman + verificación de la relación
-##        analítica Dice–Jaccard.
-##    (C) Análisis de sensibilidad: barrido de umbrales y efecto sobre la
-##        reducción (nº de clústeres, tamaño máximo de clúster = diagnóstico de
-##        chaining). Justifica la elección final.
+##      arista si reciprocal_overlap >= 0.50
+##                 y (jaccard >= 0.70 o simpson >= 0.99)
 ##
-##  Reproducible: trabaja sobre una REGIÓN contigua de CRMs (preserva la
-##  estructura de solapamiento). Por defecto usa una ventana de chr8, pero
-##  acepta cualquier cromosoma/ventana o el cromosoma completo.
+##  El análisis se organiza en tres bloques:
+##    (A) Distribución de métricas de solapamiento entre pares reales de CRMs
+##        solapantes: solapamiento recíproco, Jaccard, Simpson y Dice.
 ##
-##  DEPENDENCIAS: data.table, GenomicRanges, IRanges, ggplot2, patchwork
-##  (Reutiliza funciones de R/crm_explore.R si está disponible en el path.)
+##    (B) Evaluación de redundancia entre métricas. Dice se compara con Jaccard
+##        mediante correlación de Spearman y mediante la relación analítica
+##        Dice = 2J/(1+J), para determinar si aporta información independiente.
 ##
-##  USO:
+##    (C) Análisis de sensibilidad del umbral de solapamiento recíproco,
+##        evaluando su efecto sobre el porcentaje de reducción, el número de
+##        clústeres y el tamaño máximo de clúster.
+##
+##  El análisis se realiza sobre una región genómica contigua de CRMs, lo que
+##  permite conservar la estructura local de solapamiento. Por defecto se utiliza
+##  una ventana de chr8, aunque puede aplicarse a cualquier cromosoma, ventana o
+##  cromosoma completo.
+##
+##  Dependencias:
+##    data.table, GenomicRanges, IRanges, ggplot2 y patchwork.
+##    Si está disponible, se reutilizan funciones auxiliares de R/crm_explore.R.
+##
+##  Uso:
 ##    source("exploracion_parametros.R")
-##    # cargar CRMs crudos de un cromosoma (colapsados por ID, como en P1):
+##
 ##    crm <- cargar_crms_region("data/enh_per_chr/chr8.tsv.gz",
-##                              chr="chr8", from=38e6, to=42e6)
-##    expl <- justificar_parametros(crm, out_dir="figs_param")
+##                              chr = "chr8", from = 38e6, to = 42e6)
+##
+##    expl <- justificar_parametros(crm, out_dir = "figs_param")
+##
 ##    print(expl$tabla_distribucion)
 ##    print(expl$tabla_correlacion)
 ##    print(expl$tabla_sensibilidad)
@@ -46,17 +51,20 @@ suppressPackageStartupMessages({
 if (!exists(".msg")) .msg <- function(...)
   cat(sprintf("[%s] %s\n", format(Sys.time(), "%H:%M:%S"), paste0(...)))
 
-## Parámetros finales elegidos (para marcarlos en las figuras)
+## Parámetros finales utilizados en el criterio compuesto de reducción.
 P_RECIP   <- 0.50
 P_JACCARD <- 0.70
 P_SIMPSON <- 0.99
 
 ## ---------------------------------------------------------------------------
-## 0. Carga de CRMs crudos de una ventana (colapso por ID, como en P1)
+## 0. Carga de CRMs de una ventana genómica y colapso por identificador
 ## ---------------------------------------------------------------------------
-#' Lee un fichero crudo de CRMs y devuelve una ventana contigua colapsada por ID.
-#' Preservar una ventana contigua (no muestreo aleatorio) mantiene intacta la
-#' estructura de solapamiento, condición necesaria para describir las métricas.
+
+#' Lee un fichero de CRMs y devuelve una ventana contigua colapsada por ID.
+#'
+#' La selección de una ventana contigua, en lugar de un muestreo aleatorio,
+#' conserva la estructura local de solapamiento entre CRMs, necesaria para
+#' caracterizar adecuadamente las métricas evaluadas.
 cargar_crms_region <- function(path, chr, from = NULL, to = NULL) {
   chr_sel <- chr   # evita colisión con la columna 'chr' en data.table
   raw <- fread(path, sep = "\t", header = TRUE, quote = "", fill = TRUE)
@@ -68,7 +76,7 @@ cargar_crms_region <- function(path, chr, from = NULL, to = NULL) {
   if (!is.na(cc) && cc != "chr") setnames(raw, cc, "chr")
   raw[, start := as.integer(start)][, end := as.integer(end)]
   raw <- raw[!is.na(start) & !is.na(end) & end >= start]
-  # colapso por ID (P1): min(start), max(end)
+  # Colapso por identificador: coordenada inicial mínima y final máxima.
   col <- raw[, .(chr = chr[1L], start = min(start), end = max(end)), by = ID]
   col <- col[chr == chr_sel]
   if (!is.null(from)) col <- col[end >= from]
@@ -79,10 +87,13 @@ cargar_crms_region <- function(path, chr, from = NULL, to = NULL) {
 }
 
 ## ---------------------------------------------------------------------------
-## 1. Métricas de TODOS los pares solapados de una región (con Dice incluido)
+## 1. Cálculo de métricas para pares solapantes de CRMs
 ## ---------------------------------------------------------------------------
-#' Calcula recíproco, Jaccard, Simpson y Dice de cada par solapado.
-#' @return data.table con una fila por par solapado y sus 4 métricas.
+
+#' Calcula métricas de similitud para cada par solapante de CRMs.
+#'
+#' @return data.table con una fila por par solapante y cuatro métricas:
+#'         solapamiento recíproco, Jaccard, Simpson y Dice.
 metricas_pares <- function(dt, n_sample = 2e6, seed = 1) {
   dt <- as.data.table(dt)
   gr <- GRanges(dt$chr, IRanges(dt$start, dt$end))
@@ -104,13 +115,14 @@ metricas_pares <- function(dt, n_sample = 2e6, seed = 1) {
     reciprocal = pmin(ov / Li, ov / Lj),
     jaccard    = ov / (Li + Lj - ov),
     simpson    = ov / pmin(Li, Lj),
-    dice       = 2 * ov / (Li + Lj)          # Dice–Sørensen
+    dice       = 2 * ov / (Li + Lj)          # índice Dice-Sørensen
   )[]
 }
 
 ## ---------------------------------------------------------------------------
-## 2. (A) Distribución de métricas: cuantiles + figura
+## 2. Distribución de métricas: cuantiles y figura
 ## ---------------------------------------------------------------------------
+
 tabla_cuantiles <- function(M, probs = c(0,.1,.25,.5,.75,.9,.95,.99,1)) {
   data.table(
     cuantil    = paste0(probs * 100, "%"),
@@ -126,7 +138,7 @@ fig_distribucion_metricas <- function(M) {
   long[, metrica := factor(metrica,
                            levels = c("reciprocal","jaccard","simpson","dice"),
                            labels = c("Recíproco","Jaccard","Simpson","Dice"))]
-  # líneas de umbral elegido
+  # Umbrales finales representados en la figura.
   vlíneas <- data.table(
     metrica = factor(c("Recíproco","Jaccard","Simpson"),
                      levels = levels(long$metrica)),
@@ -150,15 +162,18 @@ fig_distribucion_metricas <- function(M) {
 }
 
 ## ---------------------------------------------------------------------------
-## 3. (B) Redundancia entre métricas: por qué se descarta Dice
+## 3. Redundancia entre métricas
 ## ---------------------------------------------------------------------------
-#' Correlaciones de Spearman entre las 4 métricas + verificación de que
-#' Dice = 2J/(1+J) (relación analítica que hace a Dice redundante con Jaccard).
+
+#' Calcula correlaciones entre métricas y evalúa la relación Dice-Jaccard.
+#'
+#' Se verifica la relación Dice = 2J/(1+J), que permite determinar si Dice
+#' aporta información independiente respecto a Jaccard.
 analisis_redundancia <- function(M) {
   cols <- c("reciprocal","jaccard","simpson","dice")
   cmat <- cor(M[, ..cols], method = "spearman")
   
-  # Verificación de la relación analítica Dice–Jaccard
+  # Verificación de la relación analítica Dice-Jaccard.
   dice_pred <- 2 * M$jaccard / (1 + M$jaccard)
   err <- max(abs(M$dice - dice_pred))
   rho_dice_jac <- cor(M$dice, M$jaccard, method = "spearman")
@@ -167,7 +182,7 @@ analisis_redundancia <- function(M) {
   list(
     correlaciones = tabla,
     dice_jaccard_rho = rho_dice_jac,
-    dice_jaccard_maxerr = err,   # ~0 confirma Dice = 2J/(1+J)
+    dice_jaccard_maxerr = err,   # valores próximos a cero confirman Dice = 2J/(1+J)
     nota = sprintf(
       "Dice y Jaccard: rho de Spearman = %.4f; error máx. frente a 2J/(1+J) = %.2e. Dice es una transformación monótona de Jaccard, luego es redundante y se descarta.",
       rho_dice_jac, err))
@@ -176,7 +191,7 @@ analisis_redundancia <- function(M) {
 fig_redundancia <- function(M, n_pts = 30000, seed = 1) {
   set.seed(seed)
   S <- if (nrow(M) > n_pts) M[sample(.N, n_pts)] else M
-  # curva analítica Dice = 2J/(1+J)
+  # Curva analítica Dice = 2J/(1+J).
   jx <- seq(0, 1, length.out = 200); dy <- 2 * jx / (1 + jx)
   curva <- data.table(jaccard = jx, dice = dy)
   p1 <- ggplot(S, aes(jaccard, dice)) +
@@ -190,7 +205,7 @@ fig_redundancia <- function(M, n_pts = 30000, seed = 1) {
     theme_minimal(base_size = 11) +
     theme(plot.title = element_text(face = "bold"),
           panel.grid.minor = element_blank())
-  # Jaccard vs Simpson: NO redundantes (capturan cosas distintas)
+  # Comparación Jaccard-Simpson para evaluar complementariedad entre métricas.
   p2 <- ggplot(S, aes(jaccard, simpson)) +
     geom_point(alpha = 0.08, size = 0.4, color = "#6BAE8E") +
     labs(title = "Jaccard y Simpson son complementarias",
@@ -205,14 +220,18 @@ fig_redundancia <- function(M, n_pts = 30000, seed = 1) {
 }
 
 ## ---------------------------------------------------------------------------
-## 4. (C) Análisis de sensibilidad: barrido de umbrales
+## 4. Análisis de sensibilidad de umbrales
 ## ---------------------------------------------------------------------------
-#' Para cada umbral recíproco (con el criterio compuesto), cuenta clústeres y
-#' el tamaño máximo de clúster (diagnóstico de chaining: si explota, el umbral
-#' es demasiado laxo). Requiere igraph para componentes conexas.
+
+#' Evalúa el efecto de distintos umbrales sobre el agrupamiento de CRMs.
 #'
-#' Versión autocontenida (no depende de crm_explore.R): calcula aristas con
-#' findOverlaps y el criterio compuesto, y agrupa con igraph.
+#' Para cada umbral de solapamiento recíproco, manteniendo el criterio compuesto,
+#' se calcula el número de clústeres, el porcentaje de reducción y el tamaño
+#' máximo de clúster. Este último se utiliza como indicador de posible
+#' encadenamiento transitivo.
+#'
+#' La función es autocontenida: calcula aristas con findOverlaps y agrupa los
+#' CRMs mediante componentes conexas con igraph.
 sensibilidad_umbrales <- function(dt,
                                   recip_grid   = c(0.30,0.40,0.50,0.60,0.70,0.80,0.90),
                                   jaccard_grid = P_JACCARD,
@@ -269,8 +288,9 @@ fig_sensibilidad <- function(S) {
 }
 
 ## ---------------------------------------------------------------------------
-## 5. Runner: ejecuta los tres bloques y guarda figuras + tablas
+## 5. Ejecución integrada del análisis y exportación de resultados
 ## ---------------------------------------------------------------------------
+
 justificar_parametros <- function(crm, out_dir = "figs_param",
                                   n_sample = 2e6, recip_grid = NULL) {
   try(Sys.setlocale("LC_CTYPE", "C.UTF-8"), silent = TRUE)
@@ -295,7 +315,7 @@ justificar_parametros <- function(crm, out_dir = "figs_param",
                                c(0.30,0.40,0.50,0.60,0.70,0.80,0.90) else recip_grid)
   save1(fig_sensibilidad(S), "param_C_sensibilidad.png", 7, 6)
   
-  .msg("Hecho. Figuras y tablas en ", out_dir, "/")
+  .msg("Análisis finalizado. Figuras y tablas en ", out_dir, "/")
   list(tabla_distribucion = q,
        tabla_correlacion = red$correlaciones,
        dice_redundancia = red,
