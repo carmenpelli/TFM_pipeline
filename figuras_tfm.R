@@ -1,28 +1,41 @@
 ################################################################################
-##  figuras_tfm.R — FIGURAS REPRODUCIBLES DEL TFM
+##  figuras_tfm.R — Generación reproducible de figuras del TFM
 ##  ==========================================================================
-##  Genera todas las figuras de la memoria a partir de los objetos .rds que el
-##  pipeline guarda en results/lineB/<chr>/pipeline_objects_<chr>.rds y del
-##  agregado global de results/global/.
+##  Este script genera las figuras de la memoria a partir de los objetos RDS
+##  producidos por el pipeline:
 ##
-##  Cada figura es una función independiente fig_XX(...) que devuelve un objeto
-##  ggplot (o, en el IGV con Gviz, dibuja directamente). Al final, un bloque
-##  main() las ejecuta todas y las guarda en figs_out/.
+##    results/lineB/<chr>/pipeline_objects_<chr>.rds
 ##
-##  REPRODUCIBILIDAD: no depende de ninguna tabla pre-agregada externa; todo se
-##  deriva de los .rds. Basta con apuntar RESULTS_DIR a tu carpeta results/.
+##  y, cuando está disponible, del agregado global almacenado en:
 ##
-##  USO:
-##    Rscript figuras_tfm.R                 # todas las figuras
-##    # o dentro de R:
-##    source("figuras_tfm.R"); main()
-##    # o una sola:  source("figuras_tfm.R"); print(fig01_reduccion(load_all()))
+##    results/global/
 ##
-##  DEPENDENCIAS:
-##    CRAN: ggplot2, data.table, scales, patchwork
-##    IGV (opción A, Bioconductor): Gviz, GenomicRanges  [recomendada]
-##    IGV (opción B): solo ggplot2  [sin dependencias extra, 100% portable]
-##    IGV (opción C, si la tienes): karyoploteR        [alternativa, ver nota]
+##  Cada figura se implementa como una función independiente fig_XX(...), que
+##  devuelve un objeto ggplot o, en el caso de la visualización genómica con
+##  Gviz, dibuja directamente sobre el dispositivo gráfico activo. La función
+##  main() ejecuta el conjunto de figuras y las exporta al directorio figs_out/.
+##
+##  Reproducibilidad:
+##    Las figuras se derivan de los objetos generados por el pipeline, evitando
+##    depender de tablas externas preagregadas. El directorio de resultados puede
+##    definirse mediante la variable de entorno TFM_RESULTS o modificando
+##    RESULTS_DIR.
+##
+##  Uso en terminal:
+##    Rscript figuras_tfm.R
+##
+##  Uso desde R:
+##    source("figuras_tfm.R")
+##    main()
+##
+##  Ejecución de una figura concreta:
+##    source("figuras_tfm.R")
+##    D <- load_all()
+##    print(fig01_reduccion(D))
+##
+##  Dependencias:
+##    CRAN: ggplot2, data.table, scales, patchwork, ggrepel
+##    Bioconductor: Gviz, GenomicRanges
 ################################################################################
 
 suppressPackageStartupMessages({
@@ -33,25 +46,28 @@ suppressPackageStartupMessages({
 })
 
 ## ---------------------------------------------------------------------------
-## 0. CONFIGURACIÓN
+## 0. Configuración general
 ## ---------------------------------------------------------------------------
-## INSTALACIÓN DE DEPENDENCIAS (ejecutar una sola vez si hace falta)
-## ---------------------------------------------------------------------------
-##   install.packages(c("ggplot2","data.table","scales","patchwork","ragg"))
-##   # IGV opción A (Bioconductor, recomendada):
-##   if (!requireNamespace("BiocManager", quietly=TRUE)) install.packages("BiocManager")
-##   BiocManager::install(c("Gviz","GenomicRanges"))
-##   # IGV opción C (alternativa, si la prefieres): install.packages("karyoploteR")
+## Instalación de dependencias, si fuese necesario:
 ##
-## NOTA SOBRE TILDES: si los acentos salen como "Distribuci..n", tu locale no es
-## UTF-8. main() intenta corregirlo con Sys.setlocale("LC_CTYPE","C.UTF-8").
-## En Windows usa "Spanish_Spain.utf8"; en macOS/Linux "es_ES.UTF-8" o "C.UTF-8".
+##   install.packages(c("ggplot2", "data.table", "scales", "patchwork", "ragg"))
+##
+##   if (!requireNamespace("BiocManager", quietly = TRUE))
+##     install.packages("BiocManager")
+##
+##   BiocManager::install(c("Gviz", "GenomicRanges"))
+##
+## Nota sobre codificación:
+##   Si los caracteres acentuados no se renderizan correctamente, es recomendable
+##   utilizar un locale UTF-8. La función main() intenta establecer C.UTF-8 de
+##   forma automática.
 ## ---------------------------------------------------------------------------
-RESULTS_DIR <- Sys.getenv("TFM_RESULTS", "results")   # ajusta o exporta TFM_RESULTS
+
+RESULTS_DIR <- Sys.getenv("TFM_RESULTS", "results")
 OUT_DIR     <- "figs_out"
 dir.create(OUT_DIR, showWarnings = FALSE)
 
-## Orden y etiquetas de las clases de DRR (gradiente de densidad)
+## Orden y etiquetas de las clases de DRR.
 CLASS_ORDER <- c("Simple_DRR", "Compact_DRR",
                  "Extended_complex_DRR", "Dense_complex_DRR")
 CLASS_LABEL <- c(Simple_DRR = "Simple", Compact_DRR = "Compact",
@@ -63,11 +79,10 @@ CLASS_COLOR <- c(Simple_DRR = "#7BA7C7", Compact_DRR = "#6BAE8E",
                  Dense_complex_DRR = "#C44E52",
                  Extensive_overlap = "#9B7FB5")
 
-## Familia tipográfica con soporte de tildes/ñ (DejaVu Sans está en casi todos
-## los sistemas; si no, cambia a "sans"). Evita el típico "Distribuci..n".
+## Familia tipográfica con soporte para caracteres acentuados.
 TFM_FONT <- "DejaVu Sans"
 
-## Tema base común para todas las figuras (sobrio, apto para impresión)
+## Tema común para las figuras del TFM.
 theme_tfm <- function(base = 12) {
   theme_minimal(base_size = base, base_family = TFM_FONT) +
     theme(panel.grid.minor = element_blank(),
@@ -82,9 +97,8 @@ theme_tfm <- function(base = 12) {
 .msg <- function(...) cat(sprintf("[%s] %s\n",
                                   format(Sys.time(), "%H:%M:%S"), paste0(...)))
 
-## Guardado robusto: usa el dispositivo 'ragg' si está (mejor con tildes y
-## anti-aliasing); si no, cae al png() por defecto. La familia DejaVu Sans
-## garantiza que las tildes y la 'ñ' se rendericen.
+## Guardado de figuras. Se usa ragg si está disponible; en caso contrario,
+## se emplea el dispositivo PNG de grDevices.
 save_fig <- function(plot, file, width = 8, height = 5, dpi = 300) {
   dev_ragg <- requireNamespace("ragg", quietly = TRUE)
   if (dev_ragg) {
@@ -98,10 +112,13 @@ save_fig <- function(plot, file, width = 8, height = 5, dpi = 300) {
 }
 
 ## ---------------------------------------------------------------------------
-## 1. CARGA DE DATOS DESDE LOS .rds (una sola pasada, cacheada)
+## 1. Carga de datos desde los objetos RDS generados por el pipeline
 ## ---------------------------------------------------------------------------
-#' Localiza y carga todos los pipeline_objects_<chr>.rds.
-#' Devuelve una lista con tablas ya combinadas y listas para graficar.
+
+#' Localiza y carga los objetos pipeline_objects_<chr>.rds.
+#'
+#' Devuelve una lista de tablas combinadas, preparadas para la generación de
+#' figuras y resúmenes gráficos.
 load_all <- function(results_dir = RESULTS_DIR) {
   rds <- list.files(file.path(results_dir, "lineB"),
                     pattern = "^pipeline_objects_.*\\.rds$",
@@ -110,20 +127,20 @@ load_all <- function(results_dir = RESULTS_DIR) {
                          file.path(results_dir, "lineB"))
   chr_of <- sub(".*pipeline_objects_(.*)\\.rds$", "\\1", rds)
   ord <- order(suppressWarnings(as.integer(gsub("chr", "", chr_of))),
-               chr_of)              # numérico y luego X/Y
+               chr_of)
   rds <- rds[ord]; chr_of <- chr_of[ord]
   .msg("Cargando ", length(rds), " cromosomas: ", paste(chr_of, collapse = ", "))
   
-  red    <- list()   # reducción TAD/CRM (summary)
-  tadcl  <- list()   # tamaño de cluster TAD
-  crmcl  <- list()   # tamaño de cluster CRM
-  per_tad_l <- list()# CRMs por TAD (n_in / n_reduced)
-  drr    <- list()   # DRRs (stacking)
-  pos    <- list()   # SEdb posicional by_class
-  gen    <- list()   # SEdb génica summary
-  topo   <- list()   # topología by_class
-  modtab <- list()   # coef del modelo por cromosoma
-  perdrr <- list()   # per_drr (size-matched) con n_SE
+  red    <- list()
+  tadcl  <- list()
+  crmcl  <- list()
+  per_tad_l <- list()
+  drr    <- list()
+  pos    <- list()
+  gen    <- list()
+  topo   <- list()
+  modtab <- list()
+  perdrr <- list()
   
   for (k in seq_along(rds)) {
     ch <- chr_of[k]; o <- readRDS(rds[k])
@@ -141,7 +158,7 @@ load_all <- function(results_dir = RESULTS_DIR) {
     crmcl[[ch]] <- data.table(chr = ch, level = "CRM",
                               n = o$red_crm$crm_reduced$n_entities)
     
-    # CRMs por TAD reducido (antes/después), de red_crm$per_tad
+    # CRMs por TAD reducido antes y después de la reducción.
     if (!is.null(o$red_crm$per_tad)) {
       pt <- as.data.table(o$red_crm$per_tad); pt[, chr := ch]
       per_tad_l[[ch]] <- pt
@@ -167,7 +184,7 @@ load_all <- function(results_dir = RESULTS_DIR) {
     }
   }
   
-  ## Modelo GLOBAL (si existe results/global/model_coef_global.tsv)
+  ## Modelo global, si existe.
   gfile <- file.path(results_dir, "global", "model_coef_global.tsv")
   mod_global <- if (file.exists(gfile)) fread(gfile) else NULL
   
@@ -187,7 +204,7 @@ load_all <- function(results_dir = RESULTS_DIR) {
   )
 }
 
-## helper: factor de clase ordenado, con etiquetas legibles
+## Funciones auxiliares para ordenar clases y cromosomas.
 .class_factor <- function(x, include_ext = FALSE) {
   lv <- if (include_ext) c(CLASS_ORDER, "Extensive_overlap") else CLASS_ORDER
   factor(x, levels = lv, labels = unname(CLASS_LABEL[lv]))
@@ -198,11 +215,13 @@ load_all <- function(results_dir = RESULTS_DIR) {
 }
 
 ## ===========================================================================
-## BLOQUE 1 — REDUCCIÓN DE REDUNDANCIA (TAD y CRM)
+## Bloque 1. Reducción de redundancia de TADs y CRMs
 ## ===========================================================================
 
-#' F1. Reducción de TADs y CRMs por cromosoma (% de reducción).
-#' Muestra la magnitud de la redundancia eliminada en P2 (TAD) y P7 (CRM).
+#' F1. Reducción de TADs y CRMs por cromosoma.
+#'
+#' Representa el porcentaje de reducción obtenido en las etapas de reducción
+#' de TADs y CRMs.
 fig01_reduccion <- function(D) {
   r <- copy(D$reduction)
   r[, `:=`(tad_pct = 100 * (1 - tad_out / tad_in),
@@ -224,8 +243,9 @@ fig01_reduccion <- function(D) {
           legend.position = "top")
 }
 
-#' F1b. Variante: conteos absolutos antes/después (escala log), TADs y CRMs.
-#' Útil si prefieres mostrar magnitudes en vez de porcentajes.
+#' F1b. Conteos absolutos antes y después de la reducción.
+#'
+#' Muestra la magnitud absoluta de la reducción en TADs y CRMs.
 fig01b_reduccion_abs <- function(D) {
   r <- copy(D$reduction)
   long <- rbindlist(list(
@@ -251,12 +271,14 @@ fig01b_reduccion_abs <- function(D) {
           legend.position = "top")
 }
 
-#' F2. Distribución del tamaño de cluster (cuántas entidades originales colapsan
-#' en cada representante). Evidencia el grado de redundancia. SUPLEMENTARIA.
+#' F2. Distribución del tamaño de los clústeres de reducción.
+#'
+#' Resume cuántas entidades originales se agrupan por representante. La cola
+#' extrema se recorta al percentil 99 para facilitar la visualización.
 fig02_tam_cluster <- function(D) {
   cl <- rbindlist(list(D$tad_clust, D$crm_clust))
   cl[, level := factor(level, levels = c("TAD", "CRM"))]
-  # recortar cola extrema para legibilidad (percentil 99 por nivel)
+  # Recorte de la cola extrema para mejorar la legibilidad.
   cl[, cap := quantile(n, 0.99), by = level]
   cl[, n_cap := pmin(n, cap)]
   
@@ -274,10 +296,10 @@ fig02_tam_cluster <- function(D) {
 }
 
 ## ===========================================================================
-## BLOQUE 2 — CARACTERIZACIÓN DE LAS DRRs
+## Bloque 2. Caracterización de regiones reguladoras densas
 ## ===========================================================================
 
-#' F3. Número de DRRs por clase (genoma completo) + desglose por cromosoma.
+#' F3. Número de DRRs por clase en el conjunto analizado.
 fig03_conteos <- function(D) {
   d <- D$drr[candidate_class %in% CLASS_ORDER]
   tot <- d[, .N, by = candidate_class]
@@ -296,7 +318,7 @@ fig03_conteos <- function(D) {
     theme_tfm()
 }
 
-#' F3b. Desglose apilado por cromosoma (composición de clases).
+#' F3b. Composición de clases de DRR por cromosoma.
 fig03b_conteos_chr <- function(D) {
   d <- D$drr[candidate_class %in% CLASS_ORDER]
   cc <- d[, .N, by = .(chr, candidate_class)]
@@ -315,7 +337,7 @@ fig03b_conteos_chr <- function(D) {
     theme(axis.text.x = element_text(angle = 45, hjust = 1))
 }
 
-#' F4. Distribución de tamaños por clase, con banda de mediana SE en literatura.
+#' F4. Distribución de tamaños de DRR por clase.
 fig04_tamanos <- function(D) {
   d <- D$drr[candidate_class %in% CLASS_ORDER]
   d[, cls := .class_factor(candidate_class)]
@@ -341,10 +363,10 @@ fig04_tamanos <- function(D) {
 }
 
 ## ===========================================================================
-## BLOQUE 3 — VALIDACIÓN (núcleo)
+## Bloque 3. Comparación con SEdb y análisis topológico
 ## ===========================================================================
 
-#' F5. Recuperación de SEdb: posicional y génica por clase (genoma completo).
+#' F5. Recuperación posicional y génica de anotaciones de SEdb por clase.
 fig05_recuperacion <- function(D) {
   pos <- D$positional[candidate_class %in% CLASS_ORDER,
                       .(n_total = sum(n_total), n_ovl = sum(n_with_ovl)),
@@ -376,14 +398,16 @@ fig05_recuperacion <- function(D) {
           axis.text.x = element_text(angle = 20, hjust = 1))
 }
 
-#' F6. Forest plot del enriquecimiento Dense_complex (IRR), por cromosoma + global.
-#' FIGURA PRINCIPAL del trabajo.
+#' F6. Forest plot del enriquecimiento de Dense_complex_DRR.
+#'
+#' Representa las razones de tasas de incidencia (IRR) por cromosoma y, cuando
+#' está disponible, la estimación global.
 fig06_forest <- function(D, ref_term = "candidate_classDense_complex_DRR") {
   mc <- D$model_chr[term == ref_term]
   mc[, `:=`(lo = exp(log(IRR) - 1.96 * std_error),
             hi = exp(log(IRR) + 1.96 * std_error))]
   setorder(mc, IRR)
-  mc[, chr := factor(chr, levels = chr)]   # ordenado por IRR
+  mc[, chr := factor(chr, levels = chr)]
   
   g_irr <- g_lo <- g_hi <- NA_real_
   if (!is.null(D$model_global)) {
@@ -418,10 +442,10 @@ fig06_forest <- function(D, ref_term = "candidate_classDense_complex_DRR") {
   p
 }
 
-#' F7. Coherencia topológica: % de DRRs en un único sub-TAD por clase.
+#' F7. Coherencia topológica de las DRRs por clase.
 fig07_topologia <- function(D) {
   tp <- D$topology[candidate_class %in% CLASS_ORDER]
-  # media ponderada por nº de DRRs entre cromosomas
+  # Media ponderada por el número de DRRs entre cromosomas.
   tp[, single := pct_single_subtad / 100 * n_drr]
   ag <- tp[, .(pct = 100 * sum(single) / sum(n_drr)), by = candidate_class]
   ag[, cls := .class_factor(candidate_class)]
@@ -440,21 +464,22 @@ fig07_topologia <- function(D) {
 }
 
 ## ===========================================================================
-## BLOQUE 4 — VISUALIZACIÓN GENÓMICA TIPO IGV
+## Bloque 4. Visualización genómica tipo IGV
 ## ===========================================================================
-## Dos implementaciones intercambiables:
-##   (A) igv_gviz()    — Bioconductor Gviz (aspecto "genome browser" clásico)
-##   (B) igv_ggplot()  — ggplot2 puro (sin dependencias Bioconductor, portable)
-## Ambas leen un único pipeline_objects_<chr>.rds y dibujan una región.
+## Se incluyen dos implementaciones alternativas:
 ##
-## NOTA karyoploteR: si la tienes instalada, es otra alternativa válida; no se
-## incluye aquí porque Gviz cubre el mismo propósito y es más fácil de instalar.
+##   (A) igv_gviz()   — visualización basada en Bioconductor/Gviz.
+##   (B) igv_ggplot() — visualización basada únicamente en ggplot2.
+##
+## Ambas funciones leen un objeto pipeline_objects_<chr>.rds y representan una
+## región genómica concreta.
 ## ---------------------------------------------------------------------------
 
-#' Carga las pistas de una región a partir del .rds de un cromosoma.
-#' Devuelve listas de data.tables: tads, crms, drrs (con n_SE).
+#' Carga las pistas genómicas de una región a partir del RDS de un cromosoma.
+#'
+#' Devuelve una lista con TADs, CRMs y DRRs dentro de la ventana seleccionada.
 load_region <- function(chr, start, end, results_dir = RESULTS_DIR) {
-  chr_sel <- chr   # evita colisión con la columna 'chr' en data.table
+  chr_sel <- chr
   rds <- file.path(results_dir, "lineB", chr,
                    paste0("pipeline_objects_", chr, ".rds"))
   if (!file.exists(rds)) stop("No existe ", rds)
@@ -470,7 +495,7 @@ load_region <- function(chr, start, end, results_dir = RESULTS_DIR) {
   
   drrs <- as.data.table(o$cmp$stacking)[
     drr_start < end & drr_end > start]
-  # añadir n_SE desde sm$per_drr (clave compuesta no necesaria aquí: un solo chr)
+  # Incorporar el número de solapamientos con SEdb por DRR.
   if (!is.null(o$sm$per_drr)) {
     se <- as.data.table(o$sm$per_drr)[, .(drr_id, n_SE)]
     drrs <- merge(drrs, se, by = "drr_id", all.x = TRUE)
@@ -481,9 +506,12 @@ load_region <- function(chr, start, end, results_dir = RESULTS_DIR) {
        tads = tads, crms = crms, drrs = drrs)
 }
 
-## ---- (A) Gviz -------------------------------------------------------------
-#' IGV con Gviz. Requiere Gviz + GenomicRanges.
-#' @return invisible; dibuja en el dispositivo activo (usa png()/save antes).
+## ---- (A) Visualización con Gviz ------------------------------------------
+
+#' Visualización genómica con Gviz.
+#'
+#' Requiere Gviz y GenomicRanges. Dibuja sobre el dispositivo gráfico activo o
+#' exporta la figura si se proporciona un nombre de archivo.
 igv_gviz <- function(region, file = NULL, width = 11, height = 7, dpi = 300) {
   stopifnot(requireNamespace("Gviz", quietly = TRUE),
             requireNamespace("GenomicRanges", quietly = TRUE))
@@ -491,21 +519,21 @@ igv_gviz <- function(region, file = NULL, width = 11, height = 7, dpi = 300) {
   IR <- IRanges::IRanges
   ch <- region$chr; s <- region$start; e <- region$end
   
-  ## Eje de coordenadas
+  ## Eje de coordenadas.
   axis <- G$GenomeAxisTrack(littleTicks = TRUE, fontcolor = "#444444",
                             col = "#888888")
   
-  ## Pista sub-TADs (AnnotationTrack)
+  ## Pista de sub-TADs.
   tad_gr <- GR(ch, IR(region$tads$start, region$tads$end),
                id = paste0("TAD ", region$tads$id))
   tad_tr <- G$AnnotationTrack(tad_gr, name = "sub-TADs",
                               fill = "#D9E2EC", col = "#5A7A99",
                               stacking = "squish", fontcolor.group = "#33506b")
   
-  ## Pista densidad de CRMs (DataTrack tipo histograma)
+  ## Pista de densidad de CRMs.
   if (nrow(region$crms)) {
     mids <- (region$crms$start + region$crms$end) / 2
-    mids <- mids[mids >= s & mids <= e]           # dentro de la ventana
+    mids <- mids[mids >= s & mids <= e]
     bins <- seq(s, e, length.out = 160)
     h <- hist(mids, breaks = bins, plot = FALSE, include.lowest = TRUE)
     dens_gr <- GR(ch, IR(round(head(bins, -1)), round(bins[-1]) - 1))
@@ -514,18 +542,18 @@ igv_gviz <- function(region, file = NULL, width = 11, height = 7, dpi = 300) {
                            col.histogram = "#8896A6", col.axis = "#777777")
   } else dens_tr <- NULL
   
-  ## Pista DRRs coloreadas por clase
+  ## Pista de DRRs coloreadas por clase.
   drr_gr <- GR(ch, IR(region$drrs$drr_start, region$drrs$drr_end))
   drr_tr <- G$AnnotationTrack(range = drr_gr, name = "DRRs",
                               stacking = "squish", col = "white",
                               feature = region$drrs$candidate_class,
                               id = region$drrs$drr_id)
-  ## colores por feature: un displayPar nombrado por cada clase presente
+  ## Asignación de colores por clase presente.
   present <- unique(region$drrs$candidate_class)
   for (nm in present)
     Gviz::displayPars(drr_tr)[[nm]] <- unname(CLASS_COLOR[nm])
   
-  ## Pista señal SEdb (DataTrack)
+  ## Pista de solapamientos con SEdb.
   se_gr <- GR(ch, IR(region$drrs$drr_start, region$drrs$drr_end))
   se_tr <- G$DataTrack(se_gr, data = region$drrs$n_SE, type = "histogram",
                        name = "SEdb (nº SE)", fill.histogram = "#C44E52",
@@ -548,10 +576,12 @@ igv_gviz <- function(region, file = NULL, width = 11, height = 7, dpi = 300) {
   if (open_dev) { dev.off(); invisible(file) }
 }
 
-## ---- (B) ggplot2 puro -----------------------------------------------------
-#' IGV en ggplot2 (sin Bioconductor). Mismo contenido, totalmente portable.
-#' Devuelve un objeto patchwork (4 pistas apiladas) si patchwork está; si no,
-#' un único ggplot facetado.
+## ---- (B) Visualización con ggplot2 ---------------------------------------
+
+#' Visualización genómica basada en ggplot2.
+#'
+#' Devuelve un objeto patchwork con cuatro pistas apiladas cuando patchwork está
+#' disponible. En caso contrario, devuelve la pista de DRRs.
 igv_ggplot <- function(region, show_title = TRUE) {
   s <- region$start; e <- region$end; ch <- region$chr
   base <- theme_tfm(11) +
@@ -562,7 +592,7 @@ igv_ggplot <- function(region, show_title = TRUE) {
   xlims <- coord_cartesian(xlim = c(s, e), expand = FALSE)
   xscale <- scale_x_continuous(labels = function(x) sprintf("%.2f", x / 1e6))
   
-  ## --- pista sub-TADs (apilado greedy en carriles) ---
+  ## Pista de sub-TADs con apilamiento por carriles.
   td <- copy(region$tads); setorder(td, start)
   lane <- integer(nrow(td)); last_end <- numeric(0)
   for (i in seq_len(nrow(td))) {
@@ -580,7 +610,7 @@ igv_ggplot <- function(region, show_title = TRUE) {
     theme(axis.text.x = element_blank(), axis.text.y = element_blank(),
           panel.grid = element_blank())
   
-  ## --- pista densidad CRMs ---
+  ## Pista de densidad de CRMs.
   mids <- (region$crms$start + region$crms$end) / 2
   mids <- mids[mids >= s & mids <= e]
   dens <- data.table(x = mids)
@@ -590,7 +620,7 @@ igv_ggplot <- function(region, show_title = TRUE) {
     labs(y = "CRMs/kb", x = NULL) + base +
     theme(axis.text.x = element_blank())
   
-  ## --- pista DRRs por clase (apilado greedy) ---
+  ## Pista de DRRs por clase con apilamiento por carriles.
   dr <- copy(region$drrs); setorder(dr, drr_start)
   lane <- integer(nrow(dr)); last_end <- numeric(0)
   for (i in seq_len(nrow(dr))) {
@@ -610,7 +640,7 @@ igv_ggplot <- function(region, show_title = TRUE) {
     theme(axis.text.x = element_blank(), axis.text.y = element_blank(),
           panel.grid = element_blank())
   
-  ## --- pista señal SEdb ---
+  ## Pista de solapamientos con SEdb.
   p_se <- ggplot(dr) +
     geom_rect(aes(xmin = drr_start, xmax = drr_end, ymin = 0, ymax = n_SE,
                   fill = candidate_class), color = NA) +
@@ -632,13 +662,14 @@ igv_ggplot <- function(region, show_title = TRUE) {
           face = "bold", size = 13, family = TFM_FONT)))
     pw
   } else {
-    .msg("patchwork no disponible; devuelvo solo la pista de DRRs.")
+    .msg("patchwork no disponible; se devuelve únicamente la pista de DRRs.")
     p_drr + labs(title = if (show_title) ttl else NULL)
   }
 }
 
-## ---- leyenda de clases (para acompañar el IGV) ----------------------------
-#' Devuelve un ggplot solo-leyenda con las clases de DRR (para montar paneles).
+## ---- Leyenda de clases para visualizaciones genómicas ---------------------
+
+#' Devuelve un objeto ggplot con la leyenda de clases de DRR.
 igv_legend <- function() {
   d <- data.table(cls = .class_factor(CLASS_ORDER), x = seq_along(CLASS_ORDER))
   ggplot(d, aes(x, 1, fill = cls)) + geom_tile() +
@@ -647,13 +678,15 @@ igv_legend <- function() {
     theme_void(base_family = TFM_FONT) + theme(legend.position = "bottom")
 }
 
-#' Panel de varias regiones destacadas (apiladas), en ggplot2.
-#' regions: lista de list(chr=, start=, end=, title=).
+#' Genera un panel de regiones genómicas seleccionadas.
+#'
+#' Cada región debe proporcionarse como una lista con chr, start, end y,
+#' opcionalmente, title.
 igv_panel <- function(regions, results_dir = RESULTS_DIR) {
   stopifnot(requireNamespace("patchwork", quietly = TRUE))
   library(patchwork)
   
-  # Mini-ggplot que solo muestra un título (fila de texto independiente).
+  # Fila de título para cada región del panel.
   title_strip <- function(txt) {
     ggplot() +
       annotate("text", x = 0, y = 0.5, label = txt, hjust = 0, vjust = 0.5,
@@ -662,22 +695,20 @@ igv_panel <- function(regions, results_dir = RESULTS_DIR) {
       theme_void()
   }
   
-  # Para cada región: una fila de título + el bloque IGV (4 pistas), apilados.
+  # Para cada región se genera una fila de título y un bloque de pistas genómicas.
   blocks <- lapply(regions, function(rg) {
     reg <- load_region(rg$chr, rg$start, rg$end, results_dir)
     ttl <- if (!is.null(rg$title)) rg$title else
       sprintf("%s:%s-%s", rg$chr, format(rg$start, big.mark="."),
               format(rg$end, big.mark="."))
     body <- wrap_elements(full = igv_ggplot(reg, show_title = FALSE))
-    # título (altura pequeña) sobre el cuerpo IGV (altura grande)
     wrap_plots(title_strip(ttl), body, ncol = 1, heights = c(0.06, 1))
   })
   
   wrap_plots(blocks, ncol = 1)
 }
 
-## Regiones destacadas por defecto (las DRRs Dense_complex más densas del genoma).
-## Ajusta libremente; el código las acepta para cualquier cromosoma.
+## Regiones destacadas por defecto para la visualización genómica.
 DEFAULT_REGIONS <- list(
   list(chr = "chr1",  start = 149740000, end = 149960000,
        title = "chr1: DRR más densa del genoma (2.743 SE)"),
@@ -688,12 +719,13 @@ DEFAULT_REGIONS <- list(
 )
 
 ## ===========================================================================
-## RUNNER — genera todas las figuras a figs_out/
+## Ejecución principal: generación de figuras en figs_out/
 ## ===========================================================================
+
 main <- function(results_dir = RESULTS_DIR, out_dir = OUT_DIR,
                  igv_engine = c("ggplot", "gviz", "both")) {
   igv_engine <- match.arg(igv_engine)
-  ## Locale UTF-8 para tildes/ñ (no-op si ya lo está)
+  ## Configuración UTF-8 para caracteres acentuados.
   try(Sys.setlocale("LC_CTYPE", "C.UTF-8"), silent = TRUE)
   dir.create(out_dir, showWarnings = FALSE)
   
@@ -722,8 +754,8 @@ main <- function(results_dir = RESULTS_DIR, out_dir = OUT_DIR,
     .msg("guardada ", nm)
   }
   
-  ## F11 (longitud original vs consenso): intenta leer CRMs crudos de enh_dir.
-  ## Si no existen, cae a la variante por nivel de soporte automáticamente.
+  ## Figura de longitud original frente a consenso. Si los ficheros originales
+  ## no están disponibles, se genera una variante por nivel de soporte.
   enh_dir <- file.path(dirname(results_dir), "data", "enh_per_chr")
   if (!dir.exists(enh_dir))
     enh_dir <- file.path(results_dir, "..", "data", "enh_per_chr")
@@ -731,7 +763,7 @@ main <- function(results_dir = RESULTS_DIR, out_dir = OUT_DIR,
            file.path(out_dir, "fig11_longitud.png"), 8, 5)
   .msg("guardada fig11_longitud")
   
-  ## IGV — motor elegido
+  ## Visualización genómica con el motor seleccionado.
   if (igv_engine %in% c("ggplot", "both")) {
     reg <- load_region("chr8", 38900000, 39200000, results_dir)
     save_fig(igv_ggplot(reg), file.path(out_dir, "fig08_igv_ggplot.png"), 11, 7)
@@ -746,37 +778,38 @@ main <- function(results_dir = RESULTS_DIR, out_dir = OUT_DIR,
       reg <- load_region("chr8", 38900000, 39200000, results_dir)
       igv_gviz(reg, file.path(out_dir, "fig08_igv_gviz.png"), 11, 7)
       .msg("guardada IGV Gviz")
-    } else .msg("Gviz no instalado; omito la versión Gviz del IGV.")
+    } else .msg("Gviz no instalado; se omite la versión Gviz de la visualización genómica.")
   }
   
   .msg("===== FIGURAS COMPLETADAS en ", out_dir, " =====")
   invisible(D)
 }
 
-## Si se ejecuta como script (Rscript figuras_tfm.R), corre main().
+## Ejecutar main() cuando el archivo se lanza mediante Rscript.
 if (sys.nframe() == 0L && !interactive()) {
   main(igv_engine = "both")
 }
 
 ## ===========================================================================
-## Equilibrio del bloque TAD/CRM — F9 a F13
+## Figuras complementarias sobre reducción TAD/CRM y soporte de consensos
 ## ===========================================================================
 
-#' F9. Esquema cuantitativo del pipeline (flujo con números globales).
-#' Resume la aportación del método: reducción de redundancia TAD y CRM.
-#' Lee solo de los .rds (campos summary).
+#' F9. Esquema cuantitativo del pipeline.
+#'
+#' Resume los totales globales de reducción de TADs y CRMs a partir de los
+#' campos summary almacenados en los objetos RDS.
 fig09_flujo <- function(D, raw_dir = NULL) {
-  # Totales globales de los summary (sumados sobre cromosomas)
+  # Totales globales agregados por cromosoma.
   red <- D$reduction
-  tad_collapsed <- sum(red$tad_in)      # TADs colapsados por ID (= n_input)
-  tad_reduced   <- sum(red$tad_out)     # TADs reducidos (= n_clusters)
-  crm_collapsed <- sum(red$crm_in)      # CRMs colapsados por ID (= n_crm_in)
-  crm_reduced   <- sum(red$crm_out)     # CRMs consenso (= n_reduced)
+  tad_collapsed <- sum(red$tad_in)
+  tad_reduced   <- sum(red$tad_out)
+  crm_collapsed <- sum(red$crm_in)
+  crm_reduced   <- sum(red$crm_out)
   
-  # CRMs asignados a TAD (= n_crm_processed): suma global desde el summary
+  # CRMs asignados a TAD reducido.
   crm_assigned <- if ("crm_assigned" %in% names(red)) sum(red$crm_assigned) else NA_integer_
   
-  # Construcción de las cajas como data.frame con posiciones
+  # Definición de cajas y posiciones para el diagrama de flujo.
   fmt <- function(x) format(x, big.mark = ".", scientific = FALSE)
   boxes <- data.table(
     row = c(rep("TADs", 2), rep("CRMs", if (is.na(crm_assigned)) 3 else 4)),
@@ -798,7 +831,7 @@ fig09_flujo <- function(D, raw_dir = NULL) {
   boxes[, y := ifelse(row == "TADs", 2, 1)]
   boxes[, fillc := ifelse(row == "TADs", "#5A7A99", "#8896A6")]
   
-  # Flechas entre cajas consecutivas dentro de cada fila
+  # Flechas entre cajas consecutivas dentro de cada fila.
   arrows <- boxes[, .(x0 = head(x, -1), x1 = tail(x, -1),
                       y = y[1]), by = row]
   
@@ -825,8 +858,9 @@ fig09_flujo <- function(D, raw_dir = NULL) {
           axis.text.y = element_text(face = "bold", size = 11))
 }
 
-#' F10. Distribución del soporte de los CRMs consenso (singleton vs multi-CRM).
-#' Usa n_entities de crm_reduced. Devuelve un donut sobrio.
+#' F10. Distribución del soporte de los CRMs consenso.
+#'
+#' Utiliza el número de CRMs originales que contribuyen a cada consenso.
 fig10_soporte <- function(D, kind = c("donut", "bar")) {
   
   kind <- match.arg(kind)
@@ -882,13 +916,13 @@ fig10_soporte <- function(D, kind = c("donut", "bar")) {
     )
   }
   
-  # Donut
+  # Representación tipo donut.
   ag[, frac := n / sum(n)]
   ag[, ymax := cumsum(frac)]
   ag[, ymin := ymax - frac]
   ag[, ymid := (ymin + ymax) / 2]
   ag[, lab := paste0(scales::percent(frac, accuracy = 0.1))]
-  ag[, small := frac < 0.03]   # saca fuera las secciones pequeñas
+  ag[, small := frac < 0.03]
   
   ggplot(
     ag,
@@ -911,7 +945,7 @@ fig10_soporte <- function(D, kind = c("donut", "bar")) {
       name = "CRMs originales\npor consenso"
     ) +
     
-    # Etiquetas dentro para las secciones grandes
+    # Etiquetas interiores para las secciones principales.
     geom_text(
       data = ag[small == FALSE],
       aes(
@@ -925,7 +959,7 @@ fig10_soporte <- function(D, kind = c("donut", "bar")) {
       inherit.aes = FALSE
     ) +
     
-    # Línea guía para las secciones pequeñas
+    # Línea guía para secciones pequeñas.
     geom_segment(
       data = ag[small == TRUE],
       aes(
@@ -939,7 +973,7 @@ fig10_soporte <- function(D, kind = c("donut", "bar")) {
       color = "black"
     ) +
     
-    # Etiqueta fuera para las secciones pequeñas
+    # Etiqueta exterior para secciones pequeñas.
     geom_label(
       data = ag[small == TRUE],
       aes(
@@ -970,16 +1004,15 @@ fig10_soporte <- function(D, kind = c("donut", "bar")) {
     )
 }
 
-#' F11. Distribución de longitud: CRMs originales vs CRMs consenso (log).
-#' El "antes" (originales) se lee de los ficheros crudos en enh_dir; el "después"
-#' (consenso) sale de los .rds. Demuestra que la reducción no genera intervalos
-#' absurdos. Si no se pasa enh_dir o no existen los ficheros, devuelve una
-#' variante alternativa: longitud del consenso por nivel de soporte.
+#' F11. Distribución de longitud: CRMs originales frente a CRMs consenso.
+#'
+#' Las longitudes originales se leen de los ficheros de entrada indicados en
+#' enh_dir. Las longitudes de consenso se recuperan de los objetos RDS. Si los
+#' ficheros originales no están disponibles, se genera una variante por nivel
+#' de soporte del consenso.
 fig11_longitud <- function(D, enh_dir = file.path(RESULTS_DIR, "..", "data", "enh_per_chr"),
                            chrs = NULL, sample_n = NULL, results_dir = RESULTS_DIR) {
-  # longitud de los consenso (de crm_reduced via load_region no; mejor del .rds)
-  # Reconstruimos consenso desde per_drr no aplica; usamos crm_clust no tiene len.
-  # -> Releemos coords de consenso de cada .rds:
+  # Longitud de los CRMs consenso recuperada desde los objetos RDS.
   rds <- list.files(file.path(results_dir, "lineB"),
                     pattern = "^pipeline_objects_.*\\.rds$",
                     recursive = TRUE, full.names = TRUE)
@@ -995,7 +1028,7 @@ fig11_longitud <- function(D, enh_dir = file.path(RESULTS_DIR, "..", "data", "en
   }))
   cons[, tipo := "CRMs consenso"]
   
-  # originales: leer ficheros crudos y colapsar por ID (igual que P1)
+  # Longitud de CRMs originales tras colapso por identificador.
   orig <- NULL
   if (!is.null(enh_dir) && dir.exists(enh_dir)) {
     chs <- if (!is.null(chrs)) chrs else D$chrs
@@ -1003,7 +1036,7 @@ fig11_longitud <- function(D, enh_dir = file.path(RESULTS_DIR, "..", "data", "en
       fp <- file.path(enh_dir, paste0(ch, ".tsv.gz"))
       if (!file.exists(fp)) return(NULL)
       raw <- fread(fp)
-      # columnas esperadas: chr,start,end,ID (ver p1_load_collapse.R)
+      # Columnas esperadas: chr, start, end, ID.
       idc <- intersect(c("ID", "id", "name"), names(raw))[1]
       if (is.na(idc)) idc <- names(raw)[4]
       setnames(raw, idc, "ID")
@@ -1019,14 +1052,14 @@ fig11_longitud <- function(D, enh_dir = file.path(RESULTS_DIR, "..", "data", "en
   }
   
   if (is.null(orig) || !nrow(orig)) {
-    .msg("No encontré CRMs crudos en ", enh_dir,
-         "; uso variante por nivel de soporte.")
+    .msg("No se encontraron CRMs originales en ", enh_dir,
+         "; se genera la variante por nivel de soporte.")
     cl <- copy(D$crm_clust)[level == "CRM"]
-    # necesitamos longitud por soporte: releer consenso con n_entities
+    # Recuperar longitud y soporte de CRMs consenso desde los objetos RDS.
     cons2 <- rbindlist(lapply(rds, function(f) {
       o <- readRDS(f); cr <- as.data.table(o$red_crm$crm_reduced)
       d <- data.table(len = cr$repr_end - cr$repr_start + 1L, n = cr$n_entities)
-      # submuestreo por cromosoma para mantener memoria/tiempo razonables
+      # Submuestreo por cromosoma para mantener tiempos y memoria acotados.
       if (nrow(d) > 40000L) d <- d[sample(.N, 40000L)]
       d
     }))
@@ -1047,7 +1080,7 @@ fig11_longitud <- function(D, enh_dir = file.path(RESULTS_DIR, "..", "data", "en
     )
   }
   
-  # opcional submuestreo para densidad rápida
+  # Submuestreo opcional para agilizar la representación de densidad.
   both <- rbind(orig, cons)
   if (!is.null(sample_n) && nrow(both) > sample_n)
     both <- both[sample(.N, sample_n)]
@@ -1064,7 +1097,7 @@ fig11_longitud <- function(D, enh_dir = file.path(RESULTS_DIR, "..", "data", "en
     theme_tfm() + theme(legend.position = "top")
 }
 
-#' F12a. CRMs por TAD reducido: distribución global (histograma).
+#' F12a. Distribución global del número de CRMs consenso por TAD reducido.
 fig12_crm_por_tad <- function(D) {
   pt <- D$per_tad[!is.na(n_reduced)]
   med <- median(pt$n_reduced)
@@ -1082,7 +1115,7 @@ fig12_crm_por_tad <- function(D) {
     theme_tfm() + theme(panel.grid.major.x = element_line(color = "grey92"))
 }
 
-#' F12b. CRMs por TAD reducido: boxplot por cromosoma (antes/después).
+#' F12b. Distribución de CRMs por TAD reducido antes y después de la reducción.
 fig12b_crm_por_tad_chr <- function(D) {
   pt <- copy(D$per_tad)
   m <- melt(pt[, .(chr, tad_id, `originales` = n_in, `consenso` = n_reduced)],
@@ -1103,12 +1136,9 @@ fig12b_crm_por_tad_chr <- function(D) {
           legend.position = "top")
 }
 
-## ---- F13. Panel de regiones de CONTRASTE (no solo el caso "bonito") -------
-#' Cuatro regiones que ilustran el rango de comportamiento del método:
-#'  (1) Dense con altísima recuperación SEdb,
-#'  (2) Compact pequeña pero con soporte alto,
-#'  (3) Extended de baja densidad,
-#'  (4) Densa pero con recuperación SEdb nula (contraste honesto).
+## ---- F13. Panel de regiones de contraste ---------------------------------
+
+#' Regiones seleccionadas para ilustrar distintos patrones de comportamiento.
 CONTRAST_REGIONS <- list(
   list(chr = "chr1",  start = 149770000, end = 149930000,
        title = "(1) Dense complex — recuperación máxima (441 CRMs, 2.743 SE)"),
@@ -1120,7 +1150,7 @@ CONTRAST_REGIONS <- list(
        title = "(4) Densa pero sin recuperación SEdb (302 CRMs, 0 SE)")
 )
 
-#' Panel de contraste (usa igv_panel con las regiones predefinidas).
+#' Genera un panel de contraste usando las regiones predefinidas.
 fig13_contraste <- function(results_dir = RESULTS_DIR) {
   igv_panel(CONTRAST_REGIONS, results_dir)
 }
