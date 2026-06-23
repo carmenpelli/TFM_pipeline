@@ -1,29 +1,27 @@
 ################################################################################
-##  FASE 2 — DETECCIÓN DE REGIONES REGULATORIAS DENSAS / CANDIDATOS A SUPER-ENHANCER
+##  crm_dense_regions.R — Detección exploratoria de regiones reguladoras densas
 ##  --------------------------------------------------------------------------
-##  Sobre los CRMs YA NO REDUNDANTES (salida de reduce_redundancy_crms),
-##  agrupa los que están a < dist_thr (def. 12.5 kb) entre elementos
-##  CONSECUTIVOS, según el criterio del documento del TFM
-##  (DOI 10.1080/15592294.2018.1514231).
+##  Este script agrupa CRMs no redundantes mediante un criterio de proximidad
+##  lineal a lo largo del cromosoma. Fue utilizado como aproximación exploratoria
+##  para comparar métricas de distancia y evaluar la formación de regiones
+##  reguladoras densas.
 ##
-##  IMPORTANTE — terminología (del documento):
-##    Los grupos resultantes se etiquetan como
-##      "structural super-enhancer candidates" / "dense regulatory regions".
-##    NUNCA como super-enhancers confirmados (no hay H3K27ac/MED1/BRD4/ChIP-seq).
+##  La agrupación se realiza sobre CRMs consecutivos ordenados por posición. Se
+##  inicia una nueva región cuando la distancia entre elementos supera el umbral
+##  definido por dist_thr.
 ##
-##  A diferencia de la reducción de redundancia, aquí el ENCADENAMIENTO lineal
-##  es DELIBERADO: un candidato a super-enhancer es, por definición, una cadena
-##  de enhancers próximos consecutivos a lo largo del cromosoma. Se ordena por
-##  posición y se corta donde el gap supera el umbral.
+##  Se implementan dos métricas de distancia:
+##    - gap: distancia entre bordes de intervalos consecutivos.
+##    - center: distancia entre puntos medios consecutivos.
 ##
-##  Dos métricas de distancia (se calculan AMBAS para comparar):
-##    - gap   : hueco entre bordes = start(siguiente) - end(anterior).
-##              Negativo si se solapan (=> distancia efectiva 0). Fiel al paper.
-##    - center: distancia entre puntos medios (centro a centro).
+##  Las regiones obtenidas se interpretan como agrupaciones estructurales de
+##  CRMs, no como super-enhancers funcionalmente validados.
 ##
-##  Coordenada usada: repr_start/repr_end (consensus/recommended) del CRM reducido.
+##  Coordenadas utilizadas:
+##    repr_start y repr_end de los CRMs reducidos.
 ##
-##  Dependencias: data.table
+##  Dependencias:
+##    data.table.
 ################################################################################
 
 suppressPackageStartupMessages({
@@ -35,17 +33,17 @@ if (!exists(".msg")) .msg <- function(...) {
 }
 
 ## ============================================================================
-## Núcleo: encadenamiento por proximidad sobre elementos ordenados por posición.
+## Núcleo: agrupamiento por proximidad sobre elementos ordenados por posición.
 ## ============================================================================
 
-#' Agrupa CRMs consecutivos cuya distancia al anterior < dist_thr.
+#' Agrupa CRMs consecutivos cuya distancia al elemento anterior es inferior a dist_thr.
 #'
 #' @param dt       data.table con al menos: ID(o cluster_id), chr, s, e
 #'                 (s,e = coordenadas a usar; aquí repr_start/repr_end).
 #' @param dist_thr umbral de distancia (pb). Def. 12500.
 #' @param metric   "gap" (borde-borde) o "center" (centro-centro).
-#' @return vector entero region_id (mismo orden que dt YA ORDENADO por chr,s).
-#'         Cada salto de cromosoma o gap>=dist_thr inicia una región nueva.
+#' @return vector entero region_id, en el mismo orden que dt tras ordenar por chr y s.
+#'         Cada cambio de cromosoma o distancia >= dist_thr inicia una nueva región.
 .chain_by_proximity <- function(dt, dist_thr = 12500, metric = c("gap","center")) {
   metric <- match.arg(metric)
   n <- nrow(dt)
@@ -58,17 +56,16 @@ if (!exists(".msg")) .msg <- function(...) {
 
   if (n >= 2L) {
     if (metric == "gap") {
-      # gap respecto al elemento anterior (ya ordenados por s).
-      # Usamos el MÁXIMO end visto hasta ahora en la región para no romper
-      # cadenas por un elemento previo más corto (manejo de solapamientos
-      # anidados): el "frente" de la región es el mayor end alcanzado.
+      # Distancia respecto al elemento anterior, con los intervalos ya ordenados por s.
+      # Se utiliza el máximo end alcanzado en la región para manejar
+      # adecuadamente intervalos solapados o anidados.
       cur_max_end <- e[1L]
       for (i in 2L:n) {
         if (chr[i] != chr[i-1L]) {
           rid <- rid + 1L
           cur_max_end <- e[i]
         } else {
-          gap <- s[i] - cur_max_end           # hueco al frente de la región
+          gap <- s[i] - cur_max_end           # distancia al límite derecho acumulado de la región
           if (gap >= dist_thr) rid <- rid + 1L
           if (e[i] > cur_max_end) cur_max_end <- e[i]
         }
@@ -80,7 +77,7 @@ if (!exists(".msg")) .msg <- function(...) {
         if (chr[i] != chr[i-1L]) {
           rid <- rid + 1L
         } else {
-          d <- ctr[i] - ctr[i-1L]             # centro a centro consecutivos
+          d <- ctr[i] - ctr[i-1L]             # distancia entre puntos medios consecutivos
           if (d >= dist_thr) rid <- rid + 1L
         }
         region_id[i] <- rid
@@ -91,18 +88,17 @@ if (!exists(".msg")) .msg <- function(...) {
 }
 
 ## ============================================================================
-## FUNCIÓN PRINCIPAL: detect_dense_regions()
+## Función principal: detect_dense_regions()
 ## ============================================================================
 
-#' Detecta regiones densas / candidatos a super-enhancer por proximidad.
+#' Detecta regiones reguladoras densas mediante proximidad entre CRMs.
 #'
 #' @param crm_reduced data.table de CRMs no redundantes (salida de
-#'        reduce_redundancy_crms). Debe tener cluster_id, chr, repr_start, repr_end.
+#'        reduce_redundancy_crms). Debe contener cluster_id, chr, repr_start y repr_end.
 #' @param dist_thr    umbral de proximidad (pb). Def. 12500 (criterio del documento).
 #' @param metric      "gap" o "center".
 #' @param min_members nº mínimo de CRMs para considerar "región densa"
-#'        (def. 2: al menos dos elementos próximos. ROSE original suele exigir
-#'        un mínimo de constituyentes; ajústalo si tu criterio difiere).
+#'        (def. 2: al menos dos elementos próximos).
 #' @return lista:
 #'   marked  : crm_reduced + columnas region_id, region_size, is_dense_candidate
 #'   regions : data.table por región densa con coordenadas y estadísticas
@@ -116,11 +112,11 @@ detect_dense_regions <- function(crm_reduced,
   req <- c("cluster_id", "chr", "repr_start", "repr_end")
   stopifnot(all(req %in% names(dt)))
 
-  # Coordenada a usar = consensus/recommended (repr_*)
+  # Coordenadas de trabajo: repr_start y repr_end.
   dt[, s := repr_start]
   dt[, e := repr_end]
 
-  # Orden por cromosoma y posición (imprescindible para el encadenamiento)
+  # Orden por cromosoma y posición.
   setorder(dt, chr, s, e)
 
   .msg("Detección de regiones densas: ", nrow(dt), " CRMs no redundantes | ",
@@ -128,11 +124,11 @@ detect_dense_regions <- function(crm_reduced,
 
   dt[, region_id := .chain_by_proximity(.SD, dist_thr = dist_thr, metric = metric)]
 
-  # Tamaño de cada región y marca de candidato
+  # Tamaño de cada región y marca de región candidata.
   dt[, region_size := .N, by = region_id]
   dt[, is_dense_candidate := region_size >= min_members]
 
-  ## --- Estadísticas + coordenadas por región densa -------------------------
+  ## --- Estadísticas y coordenadas por región densa ---------------------------
   regions <- dt[is_dense_candidate == TRUE, {
     n   <- .N
     rs  <- min(s); re <- max(e)               # extensión total de la región
@@ -142,15 +138,15 @@ detect_dense_regions <- function(crm_reduced,
       region_end     = re,
       region_span    = span,
       n_crms         = n,
-      # densidad: CRMs por kb de región
+      # densidad expresada como CRMs por kb de región
       density_per_kb = n / (span / 1000),
-      # tamaño medio de gap interno (sólo informativo)
+      # longitud media de los CRMs incluidos
       mean_crm_len   = mean(e - s + 1L),
-      # IDs de los CRMs reducidos que la forman (trazabilidad)
+      # identificadores de los CRMs reducidos incluidos
       member_cluster_ids = paste(cluster_id, collapse = ";"))
   }, by = region_id][order(chr, region_start)]
 
-  ## --- Resumen global ------------------------------------------------------
+  ## --- Resumen global --------------------------------------------------------
   summary_dt <- data.table(
     metric             = metric,
     dist_thr           = dist_thr,
@@ -162,7 +158,7 @@ detect_dense_regions <- function(crm_reduced,
     max_region_size    = if (nrow(regions)) max(regions$n_crms) else 0L,
     max_region_span    = if (nrow(regions)) max(regions$region_span) else 0L
   )
-  .msg("Candidatos a super-enhancer / regiones densas: ", nrow(regions),
+  .msg("Regiones reguladoras densas detectadas: ", nrow(regions),
        " (", summary_dt$n_crms_in_dense, " CRMs agrupados).")
 
   # Limpiar columnas auxiliares en el marcado de salida
@@ -176,7 +172,7 @@ detect_dense_regions <- function(crm_reduced,
 }
 
 ## ============================================================================
-## COMPARACIÓN DE LAS DOS MÉTRICAS (gap vs center)
+## Comparación de las dos métricas de distancia
 ## ============================================================================
 
 #' Ejecuta detect_dense_regions con ambas métricas y compara los resúmenes.
@@ -199,19 +195,19 @@ compare_distance_metrics <- function(crm_reduced, dist_thr = 12500,
 ## ----------------------------------------------------------------------------
 ## source("crm_dense_regions.R")
 ##
-## # red_crm$crm_reduced son los 530.974 CRMs no redundantes de chr8.
+## # red_crm$crm_reduced contiene los CRMs reducidos del cromosoma analizado.
 ##
 ## # Comparar ambas métricas de distancia:
 ## cmp <- compare_distance_metrics(red_crm$crm_reduced, dist_thr = 12500)
 ## print(cmp$comparison)
 ## #   Compara n_dense_candidates, n_crms_in_dense, max_region_size/span entre
-## #   "gap" y "center". Recuerda: gap es fiel al paper y robusto a tamaños;
-## #   center tiende a fragmentar regiones con CRMs grandes.
+## #   "gap" y "center". La métrica gap tiende a ser más robusta a diferencias de tamaño;
+## #   center puede fragmentar regiones cuando existen CRMs de mayor longitud.
 ##
-## # Resultados de la métrica elegida (p.ej. gap):
+## # Resultados de la métrica seleccionada, por ejemplo gap:
 ## head(cmp$gap$regions)         # regiones densas con coords y estadísticas
 ## cmp$gap$marked[is_dense_candidate == TRUE]   # CRMs marcados
 ##
-## # Guardar:
+## # Exportación opcional:
 ## # fwrite(cmp$gap$regions, "results/dense_regions_chr8_gap.tsv.gz", sep="\t")
 ## ============================================================================

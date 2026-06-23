@@ -1,28 +1,18 @@
 ################################################################################
-##  REDUCCIÓN DEFINITIVA DE REDUNDANCIA DE TADs
+##  tad_reduce_final.R — Reducción de redundancia de TADs
 ##  --------------------------------------------------------------------------
-##  Criterio fijado tras la fase exploratoria (validado en chr8):
-##    - Aristas: reciprocal_overlap >= 0.80  (recíproco PURO; sin Simpson,
-##      porque en TADs Simpson capta jerarquía sub-TAD/TAD, no redundancia).
-##    - Clustering: componentes conexas (igraph::components), igual que el
-##      pipeline de CRMs. Validado: con_nucleo=1, sin chaining espurio.
+##  Este script reduce la redundancia de anotaciones de TADs mediante
+##  solapamiento recíproco y componentes conexas.
 ##
-##  Filosofía: NO crea TADs biológicos nuevos. Colapsa anotaciones
-##  técnicamente redundantes de múltiples bases de datos / biosamples,
-##  preservando TRAZABILIDAD COMPLETA.
+##  Criterio de arista:
+##    reciprocal_overlap >= 0.80
 ##
-##  Salida por cada TAD consenso:
-##    - AMBAS coordenadas: consensus (max start/min end) y union (min start/max end)
-##    - has_core: TRUE si existe núcleo común (consensus válido)
-##    - recommended_coord: "consensus" si has_core, si no "union"
-##      (pensado para escalar a todos los cromosomas: si un cluster no tiene
-##       núcleo común, se usa la unión)
-##    - metadatos de trazabilidad CONCATENADOS (valores únicos, ;-separados)
-##    - lista de IDs originales del cluster
-##  Y ADEMÁS una tabla de mapeo ID_original -> cluster_id con los metadatos
-##  originales intactos (trazabilidad pura y completa).
+##  La reducción consolida anotaciones topológicas altamente coincidentes sin
+##  inferir nuevos dominios biológicos, preservando la trazabilidad con los
+##  identificadores y metadatos originales.
 ##
-##  Dependencias: data.table, GenomicRanges, igraph
+##  Dependencias:
+##    data.table, GenomicRanges e igraph.
 ################################################################################
 
 suppressPackageStartupMessages({
@@ -79,7 +69,7 @@ suppressPackageStartupMessages({
 }
 
 ## ============================================================================
-## FUNCIÓN PRINCIPAL: reduce_redundancy_tads()
+## Función principal: reduce_redundancy_tads()
 ## ============================================================================
 
 #' Reduce la redundancia de TADs por componentes conexas a recíproco >= thr.
@@ -87,18 +77,18 @@ suppressPackageStartupMessages({
 #' @param tad_unique data.table de TADs colapsados por ID. Debe contener al
 #'        menos chr,start,end,ID. Las columnas de metadatos presentes en
 #'        'meta_cols' se concatenan como trazabilidad.
-#' @param thr_recip  umbral de reciprocal_overlap para crear arista (def. 0.80).
+#' @param thr_recip  umbral de reciprocal_overlap para crear arista (por defecto 0.80).
 #' @param meta_cols  columnas de trazabilidad a concatenar (valores únicos).
 #'        Por defecto las de BioGateway/TADHS. Las ausentes se ignoran.
 #' @param sum_cols   columnas numéricas a SUMAR por cluster (no concatenar).
-#'        Por defecto n_rows_collapsed: el total refleja cuántas filas crudas
+#'        Por defecto n_rows_collapsed: el total refleja cuántas filas de entrada
 #'        representó el cluster. En la salida aparecen con prefijo "sum_".
 #' @param id_sep     separador para la lista de IDs originales y metadatos.
 #' @return lista con:
 #'   tad_reduced : data.table, 1 fila por TAD consenso, con AMBAS coordenadas,
 #'                 has_core, recommended_coord, metadatos concatenados,
 #'                 columnas sum_* agregadas, n_entities, original_ids, longitudes.
-#'   mapping     : data.table ID_original -> cluster_id + metadatos originales
+#'   mapping     : data.table ID_original → cluster_id + metadatos originales
 #'                 (trazabilidad completa).
 #'   summary     : data.table resumen de la reducción.
 reduce_redundancy_tads <- function(tad_unique,
@@ -125,7 +115,7 @@ reduce_redundancy_tads <- function(tad_unique,
     .msg("Aviso: columnas de metadatos ausentes (se ignoran): ",
          paste(meta_missing, collapse = ", "))
 
-  # Columnas numéricas a SUMAR por cluster (p.ej. n_rows_collapsed)
+  # Columnas numéricas a SUMAR por cluster (por ejemplo n_rows_collapsed)
   sum_present <- intersect(sum_cols, names(dt))
   sum_missing <- setdiff(sum_cols, names(dt))
   if (length(sum_missing) > 0L)
@@ -201,8 +191,8 @@ reduce_redundancy_tads <- function(tad_unique,
     meta_dt <- unique(d[, .(cluster_id)])
   }
 
-  ## --- 6b) Columnas numéricas SUMADAS por cluster (p.ej. n_rows_collapsed) --
-  ## Se suma sobre las filas crudas que cada cluster representa, de modo que
+  ## --- 6b) Columnas numéricas SUMADAS por cluster (por ejemplo n_rows_collapsed) --
+  ## Se suma sobre las filas de entrada que cada cluster representa, de modo que
   ## el total refleja cuántas anotaciones originales había antes del colapso.
   if (length(sum_present) > 0L) {
     sum_dt <- d[, lapply(.SD, sum, na.rm = TRUE),
@@ -230,7 +220,7 @@ reduce_redundancy_tads <- function(tad_unique,
   setcolorder(tad_reduced, c(front, setdiff(names(tad_reduced), front)))
   setkey(tad_reduced, cluster_id)
 
-  ## --- 8) Tabla de mapeo (trazabilidad pura: original -> cluster) ----------
+  ## --- 8) Tabla de mapeo (trazabilidad pura: original → cluster) ----------
   map_cols <- c("ID", "cluster_id", "chr", "start", "end", "length",
                 meta_present, sum_present)
   map_cols <- intersect(map_cols, names(d))
@@ -260,7 +250,7 @@ reduce_redundancy_tads <- function(tad_unique,
 }
 
 ## ----------------------------------------------------------------------------
-## Guardado de resultados (TSV.GZ, coherente con tu estilo fwrite).
+## Guardado de resultados en formato TSV.GZ.
 ## ----------------------------------------------------------------------------
 
 #' Guarda los resultados de la reducción de TADs en disco.
@@ -284,7 +274,7 @@ save_tad_reduction <- function(reduction, chr,
 }
 
 ## ============================================================================
-## EJEMPLO DE USO
+## Ejemplo de uso
 ## ----------------------------------------------------------------------------
 ## source("tad_reduce_final.R")
 ##
@@ -292,7 +282,7 @@ save_tad_reduction <- function(reduction, chr,
 ##
 ## print(red$summary)
 ## head(red$tad_reduced)     # 1 fila por TAD consenso, ambas coordenadas
-## head(red$mapping)         # trazabilidad: original_id -> cluster_id
+## head(red$mapping)         # trazabilidad: original_id → cluster_id
 ##
 ## # Guardar:
 ## save_tad_reduction(red, chr = "chr8")
@@ -304,6 +294,6 @@ save_tad_reduction <- function(reduction, chr,
 ## #   red <- reduce_redundancy_tads(tad_unique, thr_recip = 0.80)
 ## #   save_tad_reduction(red, chr = chr)
 ## # }
-## # Revisa summary$n_without_core por cromosoma: si es alto en alguno,
+## # Revisar summary$n_without_core por cromosoma si fuese necesario:
 ## # indica clusters sin núcleo común (ahí se usa la coordenada union).
 ## ============================================================================

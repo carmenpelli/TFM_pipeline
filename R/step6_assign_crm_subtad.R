@@ -1,22 +1,13 @@
 ################################################################################
-##  PASO 6 (revisado) — ANOTACIÓN CRM -> SUB-TAD MÁS ESPECÍFICO
+##  step6_assign_crm_subtad.R — Asignación de CRMs a TAD reducido
 ##  --------------------------------------------------------------------------
-##  Cambia el criterio anterior ("máximo solape en bases", que sesgaba hacia
-##  TADs gigantes) por el criterio biológicamente respaldado:
+##  Este script asigna cada CRM al TAD reducido más específico disponible. La
+##  asignación prioriza TADs que contienen completamente el CRM y, cuando no
+##  existe contención completa, utiliza como respaldo el TAD solapante de menor
+##  longitud.
 ##
-##    Asignar cada CRM al TAD MÁS PEQUEÑO que lo contiene (el sub-dominio más
-##    específico). La literatura sitúa el aislamiento de super-enhancers en
-##    sub-TADs / dominios de super-enhancer, no en los TADs grandes.
-##
-##  Modo de pertenencia:
-##    - "contained" (preferido): el TAD cubre el CRM por completo.
-##    - si ningún TAD lo contiene del todo -> respaldo "overlap": entre los TADs
-##      que solapan el CRM, se elige el más pequeño (para no perder CRMs).
-##    Los CRMs sin ningún TAD (ni contenedor ni solapante) se descartan.
-##
-##  Coordenadas: repr_start/repr_end en CRMs y TADs reducidos.
-##
-##  Dependencias: data.table, GenomicRanges
+##  Dependencias:
+##    data.table y GenomicRanges.
 ################################################################################
 
 suppressPackageStartupMessages({
@@ -33,7 +24,7 @@ if (!exists(".msg")) .msg <- function(...) {
 #' @param crm_reduced data.table de CRMs reducidos (cluster_id, chr, repr_*).
 #' @param tad_reduced data.table de TADs reducidos (cluster_id, chr, repr_*).
 #' @param crm_id_col,tad_id_col columnas id.
-#' @param start_col,end_col coordenadas (def. repr_start/repr_end).
+#' @param start_col,end_col coordenadas (por defecto repr_start/repr_end).
 #' @return lista:
 #'   crm_tad    : crm_id, tad_id, tad_length, assignment_mode ("contained"/"overlap")
 #'   unassigned : CRMs sin ningún TAD
@@ -49,8 +40,8 @@ annotate_crm_subtad <- function(crm_reduced, tad_reduced,
   crm <- as.data.table(copy(crm_reduced))
   tad <- as.data.table(copy(tad_reduced))
 
-  # Uso de [[ ]] (no get()) para evitar que un nombre como "start" se resuelva
-  # a la función start() de IRanges cuando la columna no existe.
+  # Uso de [[ ]] para evitar ambigüedad con funciones homónimas como start().
+  
   crm[, .crm_id := crm[[crm_id_col]]]
   crm[, .s := crm[[crm_start_col]]]; crm[, .e := crm[[crm_end_col]]]
   tad[, .tad_id := tad[[tad_id_col]]]
@@ -59,10 +50,10 @@ annotate_crm_subtad <- function(crm_reduced, tad_reduced,
 
   # Comprobación explícita: si alguna coordenada salió no-numérica, avisar claro
   if (!is.numeric(crm$.s) || !is.numeric(crm$.e))
-    stop("Columnas de coordenadas de CRM no numéricas: revisa crm_start_col/crm_end_col (",
+    stop("Columnas de coordenadas de CRM no numéricas: comprobar crm_start_col/crm_end_col (",
          crm_start_col, "/", crm_end_col, ") en crm_reduced.")
   if (!is.numeric(tad$.s) || !is.numeric(tad$.e))
-    stop("Columnas de coordenadas de TAD no numéricas: revisa tad_start_col/tad_end_col (",
+    stop("Columnas de coordenadas de TAD no numéricas: comprobar tad_start_col/tad_end_col (",
          tad_start_col, "/", tad_end_col, ") en tad_reduced.")
 
   n_crm_in <- nrow(crm)
@@ -81,7 +72,7 @@ annotate_crm_subtad <- function(crm_reduced, tad_reduced,
     tad_id  = tad$.tad_id[subjectHits(hits_in)],
     tad_len = tad$.tad_len[subjectHits(hits_in)]
   )
-  # Entre los TADs que CONTIENEN el CRM, el más pequeño (desempate por tad_id)
+  # Entre los TADs que contienen el CRM, se selecciona el de menor longitud.
   setorder(contained, crm_id, tad_len, tad_id)
   contained_best <- contained[, .SD[1L], by = crm_id]
   contained_best[, assignment_mode := "contained"]
@@ -98,7 +89,7 @@ annotate_crm_subtad <- function(crm_reduced, tad_reduced,
         tad_id  = tad$.tad_id[subjectHits(hits_ov)],
         tad_len = tad$.tad_len[subjectHits(hits_ov)]
       )
-      # Entre los TADs que SOLAPAN, el más pequeño
+      # Entre los TADs solapantes, se selecciona el de menor longitud.
       setorder(ov, crm_id, tad_len, tad_id)
       overlap_best <- ov[, .SD[1L], by = crm_id]
       overlap_best[, assignment_mode := "overlap"]
@@ -134,11 +125,11 @@ annotate_crm_subtad <- function(crm_reduced, tad_reduced,
 }
 
 ## ============================================================================
-## EJEMPLO DE USO
+## Ejemplo de uso
 ## ----------------------------------------------------------------------------
 ## source("step6_assign_crm_subtad.R")
 ##
-## # CASO A — P6 sobre CRMs colapsados por ID (enh_unique: ID, chr, start, end):
+## # CASo A — P6 sobre CRMs colapsados por ID (enh_unique: ID, chr, start, end):
 ## a6 <- annotate_crm_subtad(
 ##   crm_reduced  = enh_unique,            # los de P1 (1.343.498)
 ##   tad_reduced  = red_tad$tad_reduced,
@@ -147,7 +138,7 @@ annotate_crm_subtad <- function(crm_reduced, tad_reduced,
 ##   tad_start_col = "repr_start", tad_end_col = "repr_end"  # TAD usa repr_*
 ## )
 ##
-## # CASO B — P6 sobre CRMs reducidos (repr_* en ambas tablas): valores por defecto
+## # CASo B — P6 sobre CRMs reducidos (repr_* en ambas tablas): valores por defecto
 ## # a6 <- annotate_crm_subtad(red_crm$crm_reduced, red_tad$tad_reduced)
 ##
 ## print(a6$summary)

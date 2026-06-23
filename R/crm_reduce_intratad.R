@@ -1,27 +1,16 @@
 ################################################################################
-##  REDUCCIÓN DE REDUNDANCIA DE CRMs **INTRA-TAD**
+##  crm_reduce_intratad.R — Reducción intra-TAD de CRMs
 ##  --------------------------------------------------------------------------
-##  Fiel al diseño del documento: la comparación/reducción CRM-CRM se hace
-##  DENTRO de cada TAD, no globalmente. Cada CRM se asigna previamente a un
-##  único sub-TAD (P6, annotate_crm_subtad) y se reduce solo frente a los CRMs
-##  que comparten su mismo TAD.
+##  Este script aplica la reducción de redundancia de CRMs dentro de cada TAD
+##  reducido. Cada CRM se asigna previamente a un TAD y se compara únicamente
+##  con CRMs pertenecientes al mismo dominio topológico.
 ##
-##  Ventajas:
-##    - Coherencia topológica: nunca fusiona CRMs de TADs distintos.
-##    - Eficiencia: trocea el findOverlaps global (212M pares) en muchos
-##      subproblemas pequeños por TAD.
+##  Este enfoque mantiene la coherencia topológica del análisis y divide el
+##  cálculo global de solapamientos en subproblemas por TAD.
 ##
-##  Reutiliza reduce_redundancy_crms() (mismo criterio compuesto + anti-chaining)
-##  aplicándola grupo a grupo. Los IDs de cluster se hacen únicos por TAD.
-##
-##  Entradas:
-##    crm_unique : CRMs colapsados SOLO por ID (p.ej. enh_unique, 1.343.498).
-##                 Necesita ID, chr, start, end (+ metadatos opcionales).
-##    crm_tad    : a6$crm_tad de annotate_crm_subtad (crm_id, tad_id, ...).
-##                 OJO: crm_id de a6 debe corresponder al ID de crm_unique.
-##
-##  Dependencias: data.table, GenomicRanges, y los scripts:
-##    crm_explore.R, crm_antichaining_fast.R, crm_reduce_final.R
+##  Dependencias:
+##    data.table y funciones definidas en crm_explore.R,
+##    crm_antichaining_fast.R y crm_reduce_final.R.
 ################################################################################
 
 suppressPackageStartupMessages({
@@ -35,12 +24,12 @@ if (!exists(".msg")) .msg <- function(...) {
 #' Reduce la redundancia de CRMs dentro de cada TAD.
 #'
 #' @param crm_unique CRMs colapsados por ID (ID, chr, start, end, ...).
-#' @param crm_tad    tabla crm_id -> tad_id (de annotate_crm_subtad: a6$crm_tad).
-#' @param crm_id_in_unique nombre de la columna ID en crm_unique (def. "ID").
-#' @param crm_id_in_tad    nombre de la columna id en crm_tad (def. "crm_id").
+#' @param crm_tad    tabla crm_id → tad_id (de annotate_crm_subtad: a6$crm_tad).
+#' @param crm_id_in_unique nombre de la columna ID en crm_unique (por defecto "ID").
+#' @param crm_id_in_tad    nombre de la columna id en crm_tad (por defecto "crm_id").
 #' @param thr_recip,jaccard_thr,simpson_thr criterio (idéntico al global).
-#' @param min_per_tad nº mínimo de CRMs en un TAD para intentar reducir
-#'        (TADs con < min_per_tad CRMs pasan tal cual, sin comparar).
+#' @param min_per_tad número mínimo de CRMs en un TAD para intentar reducir
+#'        (TADs con < min_per_tad CRMs se mantienen sin reducción, sin comparar).
 #' @param ... se pasa a reduce_redundancy_crms (meta_cols, sum_cols, chunk_size...).
 #' @return lista:
 #'   crm_reduced : todos los CRMs reducidos (con tad_id y cluster_id global único).
@@ -88,7 +77,7 @@ reduce_redundancy_crms_intratad <- function(crm_unique, crm_tad,
     n_in <- nrow(sub)
 
     if (n_in < min_per_tad) {
-      # TAD con muy pocos CRMs: pasan tal cual (cada uno su propio cluster)
+      # TAD con pocos CRMs: se mantiene cada CRM como clúster independiente.
       red_sub <- copy(sub)
       red_sub[, cluster_id := cluster_off + seq_len(n_in)]
       red_sub[, n_entities := 1L]
@@ -101,13 +90,13 @@ reduce_redundancy_crms_intratad <- function(crm_unique, crm_tad,
       next
     }
 
-    # Reducción global PERO sobre el subconjunto = intra-TAD
+    # Reducción global PERo sobre el subconjunto = intra-TAD
     red <- tryCatch(
       reduce_redundancy_crms(sub, thr_recip = thr_recip,
                              jaccard_thr = jaccard_thr,
                              simpson_thr = simpson_thr,
                              verbose_ac = FALSE, ...),
-      error = function(e) { .msg("  TAD ", tid, " fallo: ", conditionMessage(e)); NULL }
+      error = function(e) { .msg("  TAD ", tid, " error: ", conditionMessage(e)); NULL }
     )
     if (is.null(red)) {  # fallback: sin reducir
       red_sub <- copy(sub)
@@ -123,17 +112,17 @@ reduce_redundancy_crms_intratad <- function(crm_unique, crm_tad,
     }
 
     rr <- as.data.table(red$crm_reduced)
-    # cluster_id local -> global único con offset
+    # cluster_id local → global único con offset
     rr[, cluster_id := cluster_id + cluster_off]
     rr[, tad_id := tid]
-    # coordenada representativa: usa recommended_coord si existe, si no union
+    # Coordenada representativa: usar recommended_coord si existe; si no, union.
     if (!"repr_start" %in% names(rr)) {
       rr[, repr_start := union_start]
       rr[, repr_end   := union_end]
     }
     out_list[[k]] <- rr[, .(cluster_id, tad_id, repr_start, repr_end,
                             chr, n_entities)]
-    # Mapping de trazabilidad: original_id -> cluster_id (con offset y tad_id)
+    # Mapping de trazabilidad: original_id → cluster_id (con offset y tad_id)
     if (!is.null(red$mapping)) {
       mp <- as.data.table(red$mapping)[, .(original_id, cluster_id)]
       mp[, cluster_id := cluster_id + cluster_off]
@@ -166,13 +155,13 @@ reduce_redundancy_crms_intratad <- function(crm_unique, crm_tad,
 }
 
 ## ============================================================================
-## EJEMPLO DE USO
+## Ejemplo de uso
 ## ----------------------------------------------------------------------------
 ## source("crm_explore.R"); source("crm_antichaining_fast.R")
 ## source("crm_reduce_final.R"); source("crm_reduce_intratad.R")
 ##
 ## # P6 primero, sobre los CRMs colapsados por ID (enh_unique, 1.343.498):
-## a6 <- annotate_crm_subtad(crm_reduced = enh_unique,   # ojo: aquí van los de P1
+## a6 <- annotate_crm_subtad(crm_reduced = enh_unique,   # entrada procedente de P1
 ##                           tad_reduced = red_tad$tad_reduced,
 ##                           crm_id_col = "ID", start_col = "start", end_col = "end")
 ## # (annotate_crm_subtad usa repr_* por defecto; pásale start/end de enh_unique)

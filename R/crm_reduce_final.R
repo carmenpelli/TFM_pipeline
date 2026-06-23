@@ -1,31 +1,19 @@
 ################################################################################
-##  REDUCCIÓN DEFINITIVA DE REDUNDANCIA DE CRMs
+##  crm_reduce_final.R — Reducción de redundancia de CRMs
 ##  --------------------------------------------------------------------------
-##  Criterio fijado tras la fase exploratoria (validado en chr8:125-130 Mb):
-##    - Aristas (criterio del documento del TFM):
-##        reciprocal_overlap >= 0.50
-##        Y (jaccard >= 0.70 O simpson >= 0.99)
-##    - Clustering: ANTI-CHAINING greedy por representante (NO componentes
-##      conexas). Validado: con componentes conexas el cluster mayor llegaba a
-##      17.670 CRMs sin núcleo común (chaining); con anti-chaining baja a 367
-##      con núcleo común = 100%. Equivalencia versión rápida verificada.
+##  Este script reduce la redundancia de CRMs mediante un criterio compuesto de
+##  similitud y un procedimiento de anti-chaining basado en representantes.
 ##
-##  Filosofía: NO crea CRMs biológicos nuevos. Colapsa anotaciones técnicamente
-##  redundantes de múltiples bases de datos / biosamples, preservando
-##  TRAZABILIDAD COMPLETA.
+##  Criterio de arista:
+##    reciprocal_overlap >= 0.50
+##    y (jaccard >= 0.70 o simpson >= 0.99)
 ##
-##  Salida por cada CRM consenso:
-##    - AMBAS coordenadas: consensus (max start/min end) y union (min start/max end)
-##    - has_core, recommended_coord, repr_start/repr_end (coordenada lista)
-##    - metadatos de trazabilidad concatenados (valores únicos)
-##    - columnas sum_* agregadas (p.ej. sum_n_rows_collapsed)
-##    - lista de IDs originales
-##  Y ADEMÁS tabla de mapeo ID_original -> cluster_id (trazabilidad pura).
+##  La reducción no define nuevas entidades funcionales, sino que consolida
+##  anotaciones estructuralmente redundantes procedentes de múltiples fuentes,
+##  conservando la trazabilidad con los identificadores originales.
 ##
-##  Reutiliza:
-##    - compute_crm_edges_chunked()  (crm_explore.R)
-##    - anti_chaining_fast()         (crm_antichaining_fast.R)
-##  Dependencias: data.table, GenomicRanges, igraph
+##  Dependencias:
+##    data.table, GenomicRanges e igraph.
 ################################################################################
 
 suppressPackageStartupMessages({
@@ -54,17 +42,17 @@ if (!exists(".msg")) .msg <- function(...) {
 }
 
 ## ============================================================================
-## FUNCIÓN PRINCIPAL: reduce_redundancy_crms()
+## Función principal: reduce_redundancy_crms()
 ## ============================================================================
 
 #' Reduce la redundancia de CRMs por anti-chaining + criterio compuesto.
 #'
 #' @param crm_unique  data.table de CRMs colapsados por ID (chr,start,end,ID +
 #'        metadatos).
-#' @param thr_recip   umbral recíproco (def. 0.50, del documento).
+#' @param thr_recip   umbral recíproco (por defecto 0.50, definido para el análisis).
 #' @param jaccard_thr,simpson_thr umbrales del criterio compuesto (0.70/0.99).
 #' @param meta_cols   columnas de trazabilidad a concatenar (valores únicos).
-#' @param sum_cols    columnas numéricas a sumar por cluster (def. n_rows_collapsed).
+#' @param sum_cols    columnas numéricas a sumar por cluster (por defecto n_rows_collapsed).
 #' @param chunk_size  tamaño de bloque para el cálculo de aristas.
 #' @param id_sep      separador para IDs y metadatos.
 #' @param verbose_ac  progreso del anti-chaining.
@@ -110,7 +98,7 @@ reduce_redundancy_crms <- function(crm_unique,
     keep_metrics = FALSE, chunk_size = chunk_size
   )
 
-  ## --- 2) Clustering ANTI-CHAINING (rápido) --------------------------------
+  ## --- 2) Clustering anti-chaining (optimizado) --------------------------------
   .msg("Clustering anti-chaining...")
   membership <- anti_chaining_fast(dt, edges, verbose = verbose_ac)
   n_clusters <- membership[, uniqueN(cluster_id)]
@@ -228,7 +216,7 @@ save_crm_reduction <- function(reduction, chr,
 }
 
 ## ============================================================================
-## EJEMPLO DE USO
+## Ejemplo de uso
 ## ----------------------------------------------------------------------------
 ## source("crm_explore.R")
 ## source("crm_antichaining_fast.R")
@@ -241,7 +229,7 @@ save_crm_reduction <- function(reduction, chr,
 ## head(red$crm_reduced[, .(cluster_id, n_entities, sum_n_rows_collapsed,
 ##                          repr_start, repr_end, recommended_coord)])
 ##
-## # Sobre el cromosoma completo (cuando estés listo):
+## # Sobre el cromosoma completo (cuando proceda):
 ## # red_chr8 <- reduce_redundancy_crms(enh_unique, thr_recip = 0.50)
 ## # save_crm_reduction(red_chr8, chr = "chr8")
 ## ============================================================================
