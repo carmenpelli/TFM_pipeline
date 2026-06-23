@@ -1,0 +1,55 @@
+# R / RStudio
+.Rhistory
+.RData
+.Ruserdata
+.Rproj.user/
+*.Rproj
+Rplots.pdf
+
+# macOS
+.DS_Store
+
+# Logs and temporary files
+*.log
+*.out
+*.err
+tmp/
+temp/
+cache/
+
+# Raw / processed large data
+data/**
+!data/
+!data/README_data.md
+!data/example/
+!data/example/**
+
+# Heavy results
+results/**
+!results/
+!results/README_results.md
+!results/tables/
+!results/tables/**
+!results/figures/
+!results/figures/**
+
+# Large genomic/intermediate files anywhere
+*.rds
+*.RDS
+*.bed
+*.bam
+*.bai
+*.fastq
+*.fq
+*.vcf
+*.bigWig
+*.bw
+*.tsv.gz
+*.csv.gz
+
+# Common large intermediate names
+*crm_tad*
+*crm_pairs*
+*overlap*
+*intermediate*
+*cache*
